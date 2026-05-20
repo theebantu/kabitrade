@@ -1,5 +1,5 @@
-const API_URL = 'http://localhost:5000/api';
-const socket = io('http://localhost:5000');
+const API_URL = 'https://kabitrade.onrender.com/api';
+const socket = io('https://kabitrade.onrender.com');
 
 let currentUser = null;
 let currentPage = 'marketplace';
