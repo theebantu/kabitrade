@@ -1,0 +1,227 @@
+
+  <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KabiTrade - Marketplace</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="logo">
+        <h1>🛍️ KabiTrade</h1>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-page="marketplace">
+          🏪 Marketplace
+        </button>
+        <button class="nav-item" data-page="social">
+          🌐 Social
+        </button>
+        <button class="nav-item" data-page="messages">
+          💬 Messages
+        </button>
+        <button class="nav-item" data-page="profile">
+          👤 Profile
+        </button>
+      </nav>
+
+      <div class="user-info">
+        <img id="sidebarProfilePic" src="https://via.placeholder.com/50" alt="Profile" class="profile-pic">
+        <div>
+          <p id="sidebarUsername">Loading...</p>
+          <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Marketplace Page -->
+      <section id="marketplace-page" class="page active">
+        <div class="page-header">
+          <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="🔍 Search users...">
+          </div>
+          <button class="btn-primary" onclick="showUploadModal()">+ Upload Item</button>
+        </div>
+
+        <div class="feed" id="marketplaceFeed">
+          <!-- Products will load here -->
+        </div>
+      </section>
+
+      <!-- Social Page -->
+      <section id="social-page" class="page">
+        <div class="page-header">
+          <button class="btn-primary" onclick="showSocialPostModal()">+ Create Post</button>
+        </div>
+
+        <div class="categories-scroll">
+          <button class="category-btn" onclick="filterSocial('all')">All</button>
+          <button class="category-btn" onclick="filterSocial('Tailoring')">Tailoring</button>
+          <button class="category-btn" onclick="filterSocial('Drawing')">Drawing</button>
+          <button class="category-btn" onclick="filterSocial('Tutoring/Academic')">Tutoring</button>
+          <button class="category-btn" onclick="filterSocial('Plumbing')">Plumbing</button>
+          <button class="category-btn" onclick="filterSocial('Hair Dressing')">Hair Dressing</button>
+          <button class="category-btn" onclick="filterSocial('Makeup Artistry')">Makeup</button>
+          <button class="category-btn" onclick="filterSocial('Photography & Videography')">Photography</button>
+          <button class="category-btn" onclick="filterSocial('Campus Life - Model & Fashion')">Model & Fashion</button>
+          <button class="category-btn" onclick="filterSocial('Campus Life - Graduation Ceremonies')">Graduation</button>
+        </div>
+
+        <div class="feed" id="socialFeed">
+          <!-- Social posts will load here -->
+        </div>
+      </section>
+
+      <!-- Messages Page -->
+    <!-- Messages Page -->
+<section id="messages-page" class="page">
+  <div class="messages-container">
+    <div class="conversations-list" id="conversationsList">
+      <p style="padding: 20px; text-align: center; color: #8e8e8e;">Loading conversations...</p>
+    </div>
+    <div class="chat-area">
+      <div class="chat-header" id="chatHeader">
+        <h3>💬 Select a conversation</h3>
+      </div>
+      <div class="messages-area" id="messagesArea">
+        <p style="text-align: center; color: #8e8e8e; padding: 20px;">Select a user to start messaging</p>
+      </div>
+      <div class="message-input-area">
+        <input type="text" id="messageInput" placeholder="Type message..." autocomplete="off">
+        <button class="btn-primary" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+      <!-- Profile Page -->
+<section id="profile-page" class="page">
+  <div class="profile-container">
+    <div class="profile-header">
+      <img id="profileImage" src="https://via.placeholder.com/150" alt="Profile" class="profile-pic-large">
+      <div class="profile-info">
+        <h2 id="profileName">Loading...</h2>
+        <p id="profileBio">Loading...</p>
+        <p id="profileLocation">Kenya</p>
+      </div>
+    </div>
+
+    <div class="profile-stats">
+      <div class="stat">
+        <p id="postsCount">0</p>
+        <p>Posts</p>
+      </div>
+      <div class="stat">
+        <p id="followersCount">0</p>
+        <p>Followers</p>
+      </div>
+      <div class="stat">
+        <p id="followingCount">0</p>
+        <p>Following</p>
+      </div>
+    </div>
+
+    <div class="profile-actions">
+      <button class="btn-primary" id="followBtn" onclick="toggleFollowUser()" style="display:none;">Follow</button>
+      <button class="btn-primary" onclick="editProfile()">Edit Profile</button>
+      <button class="btn-primary" id="messageBtn" onclick="openDirectMessage()" style="display:none;">💬 Message</button>
+    </div>
+  </div>
+</section>
+    </main>
+  </div>
+
+  <!-- Upload Item Modal -->
+  <div id="uploadModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeUploadModal()">&times;</span>
+      <h2>Upload Item for Sale</h2>
+      <form onsubmit="uploadProduct(event)">
+        <input type="text" id="productTitle" placeholder="Item title" required>
+        <textarea id="productDesc" placeholder="Description" required></textarea>
+        <input type="number" id="productPrice" placeholder="Price (KES)" required>
+        <select id="productCategory" required>
+          <option>Select Category</option>
+          <option value="Clothing">Clothing</option>
+          <option value="Beddings">Beddings</option>
+          <option value="Furniture">Furniture</option>
+          <option value="Electronics">Electronics</option>
+          <option value="Utensils">Utensils</option>
+          <option value="Books">Books</option>
+          <option value="Other">Other</option>
+        </select>
+        
+        <!-- IMAGE UPLOAD INPUT -->
+        <div class="image-upload-area">
+          <label for="productImage">📸 Choose Image:</label>
+          <input type="file" id="productImage" accept="image/*" required>
+          <small>Click to select an image from your computer</small>
+        </div>
+
+        <!-- PREVIEW IMAGE -->
+        <div id="imagePreview" style="display:none; margin: 10px 0;">
+          <img id="previewImg" src="" alt="Preview" style="max-width: 100%; max-height: 200px; border-radius: 8px;">
+        </div>
+
+        <!-- UPLOAD STATUS -->
+        <div id="uploadStatus" style="display:none; font-size: 12px; padding: 8px; border-radius: 4px;">
+        </div>
+
+        <button type="submit" class="btn-primary" id="submitBtn">Upload</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Social Post Modal -->
+  <div id="socialPostModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeSocialPostModal()">&times;</span>
+      <h2>Create Social Post</h2>
+      <form onsubmit="createSocialPost(event)">
+        <select id="socialCategory" required>
+          <option>Select Category</option>
+          <option value="Tailoring">Tailoring</option>
+          <option value="Drawing">Drawing</option>
+          <option value="Tutoring/Academic">Tutoring/Academic</option>
+          <option value="Plumbing">Plumbing</option>
+          <option value="Cleaning">Cleaning</option>
+          <option value="Hair Dressing">Hair Dressing</option>
+          <option value="Makeup Artistry">Makeup Artistry</option>
+          <option value="Photography & Videography">Photography & Videography</option>
+          <option value="Campus Life - Model & Fashion">Model & Fashion</option>
+          <option value="Campus Life - Graduation Ceremonies">Graduation Ceremonies</option>
+        </select>
+        <textarea id="postContent" placeholder="Write something..."></textarea>
+        
+        <!-- IMAGE UPLOAD FOR SOCIAL -->
+        <div class="image-upload-area">
+          <label for="socialImage">📸 Choose Image (Optional):</label>
+          <input type="file" id="socialImage" accept="image/*">
+          <small>Click to select an image from your computer</small>
+        </div>
+
+        <!-- PREVIEW IMAGE -->
+        <div id="socialImagePreview" style="display:none; margin: 10px 0;">
+          <img id="socialPreviewImg" src="" alt="Preview" style="max-width: 100%; max-height: 200px; border-radius: 8px;">
+        </div>
+
+        <!-- UPLOAD STATUS -->
+        <div id="socialUploadStatus" style="display:none; font-size: 12px; padding: 8px; border-radius: 4px;">
+        </div>
+
+        <button type="submit" class="btn-primary" id="socialSubmitBtn">Post</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+  <script src="js/script.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KabiTrade - Login</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="auth-body">
+  <div class="auth-container">
+    <div class="auth-box">
+      <div class="auth-logo">
+        <h1>🛍️ KabiTrade</h1>
+        <p>Second-hand Marketplace for University Students</p>
+      </div>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="auth-form active">
+        <h2>Login</h2>
+        <input type="text" id="loginUsername" placeholder="Username" required>
+        <input type="password" id="loginPassword" placeholder="Password" required>
+        <button type="submit" class="btn-primary">Login</button>
+        <p class="auth-toggle">
+          Don't have an account? <a href="#" onclick="toggleAuthForm(event)">Sign Up</a>
+        </p>
+        <p class="auth-toggle">
+          Forgot password? <a href="forgot-password.html">Reset Password</a>
+        </p>
+      </form>
+
+      <!-- Register Form -->
+      <form id="registerForm" class="auth-form">
+        <h2>Create Account</h2>
+        <input type="text" id="registerUsername" placeholder="Username" required>
+        <input type="email" id="registerEmail" placeholder="Email" required>
+        <input type="password" id="registerPassword" placeholder="Password" required>
+        <input type="password" id="registerConfirmPassword" placeholder="Confirm Password" required>
+        <button type="submit" class="btn-primary">Create Account</button>
+        <p class="auth-toggle">
+          Already have an account? <a href="#" onclick="toggleAuthForm(event)">Login</a>
+        </p>
+      </form>
+
+      <div id="authMessage" class="message"></div>
+    </div>
+  </div>
+
+  <script src="js/auth.js"></script>
+</body>
+</html>
