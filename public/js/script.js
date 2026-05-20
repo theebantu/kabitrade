@@ -1,5 +1,9 @@
 const API_URL = 'https://kabitrade.onrender.com/api';
-const socket = io('https://kabitrade.onrender.com');
+const socket = io('https://kabitrade.onrender.com',{
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  reconnectionAttempts: 5});
 
 let currentUser = null;
 let currentPage = 'marketplace';
@@ -57,7 +61,7 @@ function switchPage(page) {
 
   if (page === 'marketplace') loadMarketplaceFeed();
   else if (page === 'social') loadSocialFeed();
-  else if (page === 'messages') loadConversations();
+  else if (page === 'messages') {loadConversations();}
   else if (page === 'profile') loadProfile();
 }
 
@@ -476,8 +480,8 @@ async function loadConversations() {
     const list = document.getElementById('conversationsList');
     list.innerHTML = '';
 
-    if (conversations.length === 0) {
-      list.innerHTML = '<p style="padding: 20px; text-align: center; color: #8e8e8e;">No conversations yet. Send a message to start!</p>';
+    if (!conversations || conversations.length === 0) {
+      list.innerHTML = '<p style="padding: 20px;">No conversations</p>';
       return;
     }
 
@@ -486,72 +490,50 @@ async function loadConversations() {
       item.className = 'conversation-item';
       item.onclick = () => openConversation(conv.userId, conv.username);
       item.innerHTML = `
-        <img src="${conv.profilePicture}" alt="" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover; margin-right: 10px;">
-        <div style="flex: 1;">
-          <div style="font-weight: 600; font-size: 14px;">${conv.username}</div>
-          <small style="color: #8e8e8e;">${conv.lastMessage ? conv.lastMessage.substring(0, 50) : 'No messages'}</small>
-        </div>
+        <img src="${conv.profilePicture}" style="width: 40px; height: 40px; border-radius: 50%; margin-right: 10px;">
+        <div><strong>${conv.username}</strong></div>
       `;
       list.appendChild(item);
     });
   } catch (error) {
-    console.error('Error loading conversations:', error);
+    console.error('Error:', error);
   }
 }
 
 async function openConversation(userId, username) {
   currentChat = { id: userId, name: username };
+  document.getElementById('chatHeader').innerHTML = `<h3>${username}</h3>`;
+  
+  const response = await fetch(`${API_URL}/messages/${currentUser.id}/${userId}`);
+  const messages = await response.json();
 
-  document.getElementById('chatHeader').innerHTML = `
-    <h3 style="margin: 0;">${username}</h3>
-  `;
+  const area = document.getElementById('messagesArea');
+  area.innerHTML = '';
 
-  await loadMessages(userId);
-}
+  messages.forEach(msg => {
+    const div = document.createElement('div');
+    div.className = 'message ' + (msg.sender === currentUser.id ? 'sent' : 'received');
+    div.textContent = msg.message;
+    area.appendChild(div);
+  });
 
-async function loadMessages(userId) {
-  try {
-    const response = await fetch(`${API_URL}/messages/${currentUser.id}/${userId}`);
-    const messages = await response.json();
-
-    const messagesArea = document.getElementById('messagesArea');
-    messagesArea.innerHTML = '';
-
-    if (messages.length === 0) {
-      messagesArea.innerHTML = '<p style="text-align: center; color: #8e8e8e; padding: 20px;">Start a conversation!</p>';
-    } else {
-      messages.forEach(msg => {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = 'message ' + (msg.sender === currentUser.id ? 'sent' : 'received');
-        msgDiv.textContent = msg.message;
-        messagesArea.appendChild(msgDiv);
-      });
-      messagesArea.scrollTop = messagesArea.scrollHeight;
-    }
-  } catch (error) {
-    console.error('Error loading messages:', error);
-  }
+  area.scrollTop = area.scrollHeight;
 }
 
 function sendMessageToSeller(sellerId, sellerName) {
   currentChat = { id: sellerId, name: sellerName };
   switchPage('messages');
   document.getElementById('chatHeader').innerHTML = `<h3>${sellerName}</h3>`;
-  document.getElementById('messagesArea').innerHTML = '<p style="text-align: center; color: #8e8e8e; padding: 20px;">Start a conversation!</p>';
-  setTimeout(() => loadConversations(), 500);
+  document.getElementById('messagesArea').innerHTML = '<p>Start chatting!</p>';
+  loadConversations();
 }
 
 function sendMessage() {
-  const messageInput = document.getElementById('messageInput');
-  const message = messageInput.value.trim();
+  const input = document.getElementById('messageInput');
+  const msg = input.value.trim();
 
-  if (!message) {
-    alert('Type a message first');
-    return;
-  }
-
-  if (!currentChat) {
-    alert('Select a conversation first');
+  if (!msg || !currentChat) {
+    alert('Select user and type message');
     return;
   }
 
@@ -561,19 +543,16 @@ function sendMessage() {
     body: JSON.stringify({
       sender: currentUser.id,
       receiver: currentChat.id,
-      message: message
+      message: msg
     })
   })
-  .then(res => res.json())
+  .then(r => r.json())
   .then(data => {
-    messageInput.value = '';
-    loadMessages(currentChat.id);
+    input.value = '';
     loadConversations();
+    openConversation(currentChat.id, currentChat.name);
   })
-  .catch(error => {
-    console.error('Error:', error);
-    alert('Error sending message');
-  });
+  .catch(e => alert('Error'));
 }
 
 
