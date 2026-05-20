@@ -828,6 +828,91 @@ io.on('connection', (socket) => {
   });
 });
 
+// ========== COMPLETE MESSAGE ROUTES ==========
+
+// GET ALL MESSAGES BETWEEN TWO USERS
+app.get('/api/messages/:userId1/:userId2', (req, res) => {
+  try {
+    const messages = readJsonFile(messagesFile);
+    const userId1 = req.params.userId1;
+    const userId2 = req.params.userId2;
+
+    const conversation = messages.filter(m => 
+      (m.sender === userId1 && m.receiver === userId2) ||
+      (m.sender === userId2 && m.receiver === userId1)
+    ).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    res.json(conversation);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET CONVERSATIONS FOR A USER
+app.get('/api/messages/user/:userId', (req, res) => {
+  try {
+    const messages = readJsonFile(messagesFile);
+    const users = readJsonFile(usersFile);
+    const userId = req.params.userId;
+
+    const conversationMap = {};
+
+    messages.forEach(msg => {
+      const partnerId = msg.sender === userId ? msg.receiver : msg.sender;
+      const partner = users.find(u => u.id === partnerId);
+
+      if (!conversationMap[partnerId]) {
+        conversationMap[partnerId] = {
+          userId: partnerId,
+          username: partner?.username,
+          profilePicture: partner?.profilePicture,
+          lastMessage: msg.message,
+          timestamp: msg.timestamp
+        };
+      } else {
+        conversationMap[partnerId].lastMessage = msg.message;
+        conversationMap[partnerId].timestamp = msg.timestamp;
+      }
+    });
+
+    const conversations = Object.values(conversationMap)
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    res.json(conversations);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// SEND MESSAGE
+app.post('/api/messages/send', (req, res) => {
+  try {
+    const { sender, receiver, message } = req.body;
+
+    if (!sender || !receiver || !message) {
+      return res.status(400).json({ error: 'All fields required' });
+    }
+
+    const messages = readJsonFile(messagesFile);
+
+    const newMessage = {
+      id: generateId(),
+      sender,
+      receiver,
+      message,
+      timestamp: new Date().toISOString(),
+      read: false
+    };
+
+    messages.push(newMessage);
+    writeJsonFile(messagesFile, messages);
+
+    res.status(201).json(newMessage);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ========== START SERVER ==========
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
