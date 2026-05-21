@@ -42,6 +42,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   socket.on('receive-message', (data) => {
     loadConversations();
+    if (currentChat && data.senderId === currentChat.id) {
+      openConversation(currentChat.id, currentChat.name);
+    }
   });
 });
 
@@ -88,7 +91,7 @@ async function loadMarketplaceFeed() {
     <img src="${product.seller.profilePicture}" alt="" class="author-pic">
     <div class="seller-name">${product.seller.username}</div>
   </div>
-  <button class="action-btn" onclick="sendMessageToSeller('${product.seller._id}', '${product.seller.username}')">💬</button>
+  <button class="action-btn" onclick="sendMessageToSeller('${product.seller._id || product.seller.id}', '${product.seller.username}')">💬</button>
 </div>
           <img src="${product.image}" alt="" class="product-image" onerror="this.src='https://via.placeholder.com/400'">
           <div class="product-content">
@@ -521,6 +524,10 @@ async function openConversation(userId, username) {
 }
 
 function sendMessageToSeller(sellerId, sellerName) {
+  if (!sellerId || sellerId === 'undefined') {
+    alert('Could not find this seller. Please try again.');
+    return;
+  }
   currentChat = { id: sellerId, name: sellerName };
   switchPage('messages');
   document.getElementById('chatHeader').innerHTML = `<h3>${sellerName}</h3>`;
@@ -528,7 +535,7 @@ function sendMessageToSeller(sellerId, sellerName) {
   loadConversations();
 }
 
-function sendMessage() {
+async function sendMessage() {
   const input = document.getElementById('messageInput');
   const msg = input.value.trim();
 
@@ -537,22 +544,36 @@ function sendMessage() {
     return;
   }
 
-  fetch(`${API_URL}/messages/send`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sender: currentUser.id,
-      receiver: currentChat.id,
-      message: msg
-    })
-  })
-  .then(r => r.json())
-  .then(data => {
+  if (!currentChat.id || currentChat.id === 'undefined') {
+    alert('Invalid recipient. Please select the seller again.');
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/messages/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sender: currentUser.id,
+        receiver: currentChat.id,
+        message: msg,
+        senderName: currentUser.username
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      alert(data.error || 'Failed to send message');
+      return;
+    }
+
     input.value = '';
-    loadConversations();
-    openConversation(currentChat.id, currentChat.name);
-  })
-  .catch(e => alert('Error'));
+    await loadConversations();
+    await openConversation(currentChat.id, currentChat.name);
+  } catch (e) {
+    alert('Could not send message. Check your connection.');
+  }
 }
 
 

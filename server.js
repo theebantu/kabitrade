@@ -544,36 +544,82 @@ app.post('/api/social/:postId/comment', (req, res) => {
   }
 });
 
-// ========== USER ROUTES ==========
-// ========== MESSAGE ROUTES ==========
+// ========== MESSAGING ==========
+const activeUsers = {};
 
-// GET ALL MESSAGES BETWEEN TWO USERS
-app.get('/api/messages/:userId1/:userId2', (req, res) => {
+function persistAndDeliverMessage(sender, receiver, messageText, senderName) {
+  const messages = readJsonFile(messagesFile);
+  const newMessage = {
+    id: generateId(),
+    sender,
+    receiver,
+    message: messageText,
+    timestamp: new Date().toISOString(),
+    read: false
+  };
+  if (senderName) newMessage.senderName = senderName;
+
+  messages.push(newMessage);
+  writeJsonFile(messagesFile, messages);
+
+  if (activeUsers[receiver]) {
+    io.to(activeUsers[receiver]).emit('receive-message', {
+      id: newMessage.id,
+      senderId: sender,
+      senderName: senderName || null,
+      message: messageText,
+      timestamp: newMessage.timestamp
+    });
+  }
+
+  return newMessage;
+}
+
+// ========== MESSAGE ROUTES (specific paths before :userId1/:userId2) ==========
+
+// GET CONVERSATIONS FOR A USER
+app.get('/api/messages/user/:userId', (req, res) => {
   try {
     const messages = readJsonFile(messagesFile);
-    const userId1 = req.params.userId1;
-    const userId2 = req.params.userId2;
+    const users = readJsonFile(usersFile);
+    const userId = req.params.userId;
+    const conversationMap = {};
 
-    // Get messages between these two users (in both directions)
-    const conversation = messages.filter(m => 
-      (m.sender === userId1 && m.receiver === userId2) ||
-      (m.sender === userId2 && m.receiver === userId1)
-    ).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    messages.forEach(msg => {
+      if (msg.sender !== userId && msg.receiver !== userId) return;
 
-    res.json(conversation);
+      const partnerId = msg.sender === userId ? msg.receiver : msg.sender;
+      const partner = users.find(u => u.id === partnerId);
+      const existing = conversationMap[partnerId];
+      const msgTime = new Date(msg.timestamp).getTime();
+
+      if (!existing || msgTime >= new Date(existing.timestamp).getTime()) {
+        conversationMap[partnerId] = {
+          userId: partnerId,
+          username: partner?.username,
+          profilePicture: partner?.profilePicture,
+          lastMessage: msg.message,
+          timestamp: msg.timestamp
+        };
+      }
+    });
+
+    const conversations = Object.values(conversationMap)
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    res.json(conversations);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// GET ALL CONVERSATIONS FOR A USER
+// GET ALL CONVERSATIONS FOR A USER (alternate response shape)
 app.get('/api/messages/conversations/:userId', (req, res) => {
   try {
     const messages = readJsonFile(messagesFile);
     const users = readJsonFile(usersFile);
     const userId = req.params.userId;
 
-    // Get unique conversation partners
     const conversationPartners = new Set();
     messages.forEach(msg => {
       if (msg.sender === userId) {
@@ -583,15 +629,13 @@ app.get('/api/messages/conversations/:userId', (req, res) => {
       }
     });
 
-    // Get user details for each partner
     const conversations = Array.from(conversationPartners).map(partnerId => {
       const user = users.find(u => u.id === partnerId);
-      const lastMessage = messages
-        .filter(m => 
-          (m.sender === userId && m.receiver === partnerId) ||
-          (m.sender === partnerId && m.receiver === userId)
-        )
-        .pop();
+      const thread = messages.filter(m =>
+        (m.sender === userId && m.receiver === partnerId) ||
+        (m.sender === partnerId && m.receiver === userId)
+      ).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      const lastMessage = thread[thread.length - 1];
 
       return {
         user: {
@@ -614,30 +658,19 @@ app.get('/api/messages/conversations/:userId', (req, res) => {
 // SEND MESSAGE
 app.post('/api/messages/send', (req, res) => {
   try {
-    const { sender, receiver, message } = req.body;
+    const { sender, receiver, message, senderName } = req.body;
 
     if (!sender || !receiver || !message) {
       return res.status(400).json({ error: 'All fields required' });
     }
 
-    const messages = readJsonFile(messagesFile);
+    const users = readJsonFile(usersFile);
+    if (!users.find(u => u.id === sender) || !users.find(u => u.id === receiver)) {
+      return res.status(400).json({ error: 'Invalid sender or receiver' });
+    }
 
-    const newMessage = {
-      id: generateId(),
-      sender,
-      receiver,
-      message,
-      timestamp: new Date(),
-      read: false
-    };
-
-    messages.push(newMessage);
-    writeJsonFile(messagesFile, messages);
-
-    res.status(201).json({
-      message: 'Message sent successfully',
-      data: newMessage
-    });
+    const newMessage = persistAndDeliverMessage(sender, receiver, message, senderName);
+    res.status(201).json(newMessage);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -661,6 +694,26 @@ app.put('/api/messages/:messageId/read', (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// GET ALL MESSAGES BETWEEN TWO USERS (must be after /user/ and /conversations/)
+app.get('/api/messages/:userId1/:userId2', (req, res) => {
+  try {
+    const messages = readJsonFile(messagesFile);
+    const userId1 = req.params.userId1;
+    const userId2 = req.params.userId2;
+
+    const conversation = messages.filter(m =>
+      (m.sender === userId1 && m.receiver === userId2) ||
+      (m.sender === userId2 && m.receiver === userId1)
+    ).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    res.json(conversation);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== USER ROUTES ==========
 
 // GET USER PROFILE
 app.get('/api/users/:userId', (req, res) => {
@@ -770,50 +823,28 @@ app.put('/api/users/:userId', (req, res) => {
   }
 });
 
-// ========== MESSAGING WITH SOCKET.IO ==========
-const activeUsers = {};
-
+// ========== SOCKET.IO ==========
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('user-online', (userId) => {
     activeUsers[userId] = socket.id;
     console.log('User online:', userId);
-    // Broadcast user is online
     io.emit('user-status', { userId, status: 'online' });
   });
 
   socket.on('send-message', (data) => {
     try {
-      const messages = readJsonFile(messagesFile);
-
-      const message = {
-        id: generateId(),
-        sender: data.senderId,
-        receiver: data.receiverId,
-        message: data.message,
-        senderName: data.senderName,
-        timestamp: new Date(),
-        read: false
-      };
-
-      messages.push(message);
-      writeJsonFile(messagesFile, messages);
-
-      // Send to receiver if online
-      if (activeUsers[data.receiverId]) {
-        io.to(activeUsers[data.receiverId]).emit('receive-message', {
-          id: message.id,
-          senderId: data.senderId,
-          senderName: data.senderName,
-          message: data.message,
-          timestamp: new Date()
-        });
-      }
-
+      const message = persistAndDeliverMessage(
+        data.senderId,
+        data.receiverId,
+        data.message,
+        data.senderName
+      );
       socket.emit('message-sent', { success: true, messageId: message.id });
     } catch (error) {
       console.error('Message error:', error);
+      socket.emit('message-sent', { success: false, error: error.message });
     }
   });
 
@@ -826,91 +857,6 @@ io.on('connection', (socket) => {
       }
     }
   });
-});
-
-// ========== COMPLETE MESSAGE ROUTES ==========
-
-// GET ALL MESSAGES BETWEEN TWO USERS
-app.get('/api/messages/:userId1/:userId2', (req, res) => {
-  try {
-    const messages = readJsonFile(messagesFile);
-    const userId1 = req.params.userId1;
-    const userId2 = req.params.userId2;
-
-    const conversation = messages.filter(m => 
-      (m.sender === userId1 && m.receiver === userId2) ||
-      (m.sender === userId2 && m.receiver === userId1)
-    ).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-    res.json(conversation);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET CONVERSATIONS FOR A USER
-app.get('/api/messages/user/:userId', (req, res) => {
-  try {
-    const messages = readJsonFile(messagesFile);
-    const users = readJsonFile(usersFile);
-    const userId = req.params.userId;
-
-    const conversationMap = {};
-
-    messages.forEach(msg => {
-      const partnerId = msg.sender === userId ? msg.receiver : msg.sender;
-      const partner = users.find(u => u.id === partnerId);
-
-      if (!conversationMap[partnerId]) {
-        conversationMap[partnerId] = {
-          userId: partnerId,
-          username: partner?.username,
-          profilePicture: partner?.profilePicture,
-          lastMessage: msg.message,
-          timestamp: msg.timestamp
-        };
-      } else {
-        conversationMap[partnerId].lastMessage = msg.message;
-        conversationMap[partnerId].timestamp = msg.timestamp;
-      }
-    });
-
-    const conversations = Object.values(conversationMap)
-      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    res.json(conversations);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// SEND MESSAGE
-app.post('/api/messages/send', (req, res) => {
-  try {
-    const { sender, receiver, message } = req.body;
-
-    if (!sender || !receiver || !message) {
-      return res.status(400).json({ error: 'All fields required' });
-    }
-
-    const messages = readJsonFile(messagesFile);
-
-    const newMessage = {
-      id: generateId(),
-      sender,
-      receiver,
-      message,
-      timestamp: new Date().toISOString(),
-      read: false
-    };
-
-    messages.push(newMessage);
-    writeJsonFile(messagesFile, messages);
-
-    res.status(201).json(newMessage);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 });
 
 // ========== START SERVER ==========
