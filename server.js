@@ -98,6 +98,40 @@ function normalizeProductSeller(product) {
   return product;
 }
 
+function userIdsEqual(a, b) {
+  return a != null && b != null && String(a) === String(b);
+}
+
+function listIncludes(list, id) {
+  return (list || []).some(entry => userIdsEqual(entry, id));
+}
+
+async function getUserContentCounts(userId) {
+  const products = await store.get('products');
+  const socialPosts = await store.get('socialPosts');
+  const marketplaceListings = products.filter(p => userIdsEqual(resolveAuthorId(p.seller), userId)).length;
+  const socialCount = socialPosts.filter(
+    p => userIdsEqual(resolveAuthorId(p.author), userId) && new Date(p.expiresAt) > new Date()
+  ).length;
+  return {
+    postsCount: socialCount + marketplaceListings,
+    socialPosts: socialCount,
+    marketplaceListings
+  };
+}
+
+function formatUserProfile(user, counts) {
+  const { password, ...safeUser } = user;
+  return {
+    ...safeUser,
+    followersCount: (safeUser.followers || []).length,
+    followingCount: (safeUser.following || []).length,
+    postsCount: counts.postsCount,
+    socialPosts: counts.socialPosts,
+    marketplaceListings: counts.marketplaceListings
+  };
+}
+
 function formatProductSeller(users, sellerRef) {
   return formatPostAuthor(users, sellerRef);
 }
@@ -824,14 +858,14 @@ app.get('/api/social/search', async (req, res) => {
 app.get('/api/users/:userId', async (req, res) => {
   try {
     const users = await store.get('users');
-    const user = users.find(u => u.id === req.params.userId);
+    const user = users.find(u => userIdsEqual(u.id, req.params.userId));
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const { password, ...safeUser } = user;
-    res.json(safeUser);
+    const counts = await getUserContentCounts(user.id);
+    res.json(formatUserProfile(user, counts));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -841,10 +875,19 @@ app.get('/api/users/:userId', async (req, res) => {
 app.post('/api/users/:userId/follow', async (req, res) => {
   try {
     const { currentUserId } = req.body;
-    const users = await store.get('users');
+    const targetUserId = req.params.userId;
 
-    const userToFollow = users.find(u => u.id === req.params.userId);
-    const currentUser = users.find(u => u.id === currentUserId);
+    if (!currentUserId) {
+      return res.status(400).json({ error: 'You must be logged in to follow' });
+    }
+
+    if (userIdsEqual(currentUserId, targetUserId)) {
+      return res.status(400).json({ error: 'You cannot follow yourself' });
+    }
+
+    const users = await store.get('users');
+    const userToFollow = users.find(u => userIdsEqual(u.id, targetUserId));
+    const currentUser = users.find(u => userIdsEqual(u.id, currentUserId));
 
     if (!userToFollow || !currentUser) {
       return res.status(404).json({ error: 'User not found' });
@@ -853,17 +896,24 @@ app.post('/api/users/:userId/follow', async (req, res) => {
     currentUser.following = currentUser.following || [];
     userToFollow.followers = userToFollow.followers || [];
 
-    if (!currentUser.following.includes(req.params.userId)) {
-      currentUser.following.push(req.params.userId);
+    if (!listIncludes(currentUser.following, targetUserId)) {
+      currentUser.following.push(targetUserId);
     }
 
-    if (!userToFollow.followers.includes(currentUserId)) {
+    if (!listIncludes(userToFollow.followers, currentUserId)) {
       userToFollow.followers.push(currentUserId);
     }
 
     await store.set('users', users);
 
-    res.json({ message: 'Followed successfully' });
+    const targetCounts = await getUserContentCounts(userToFollow.id);
+    const currentCounts = await getUserContentCounts(currentUser.id);
+
+    res.json({
+      message: 'Followed successfully',
+      currentUser: formatUserProfile(currentUser, currentCounts),
+      targetUser: formatUserProfile(userToFollow, targetCounts)
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -873,21 +923,33 @@ app.post('/api/users/:userId/follow', async (req, res) => {
 app.post('/api/users/:userId/unfollow', async (req, res) => {
   try {
     const { currentUserId } = req.body;
-    const users = await store.get('users');
+    const targetUserId = req.params.userId;
 
-    const userToUnfollow = users.find(u => u.id === req.params.userId);
-    const currentUser = users.find(u => u.id === currentUserId);
+    if (!currentUserId) {
+      return res.status(400).json({ error: 'You must be logged in' });
+    }
+
+    const users = await store.get('users');
+    const userToUnfollow = users.find(u => userIdsEqual(u.id, targetUserId));
+    const currentUser = users.find(u => userIdsEqual(u.id, currentUserId));
 
     if (!userToUnfollow || !currentUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    currentUser.following = currentUser.following.filter(id => id !== req.params.userId);
-    userToUnfollow.followers = userToUnfollow.followers.filter(id => id !== currentUserId);
+    currentUser.following = (currentUser.following || []).filter(id => !userIdsEqual(id, targetUserId));
+    userToUnfollow.followers = (userToUnfollow.followers || []).filter(id => !userIdsEqual(id, currentUserId));
 
     await store.set('users', users);
 
-    res.json({ message: 'Unfollowed successfully' });
+    const targetCounts = await getUserContentCounts(userToUnfollow.id);
+    const currentCounts = await getUserContentCounts(currentUser.id);
+
+    res.json({
+      message: 'Unfollowed successfully',
+      currentUser: formatUserProfile(currentUser, currentCounts),
+      targetUser: formatUserProfile(userToUnfollow, targetCounts)
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

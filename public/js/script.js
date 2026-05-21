@@ -101,6 +101,70 @@ function sameUserId(a, b) {
   return String(a) === String(b);
 }
 
+function isFollowing(userId) {
+  return (currentUser.following || []).some(id => sameUserId(id, userId));
+}
+
+function applyCurrentUserFromServer(user) {
+  currentUser.following = user.following || [];
+  currentUser.followers = user.followers || [];
+  currentUser.bio = user.bio;
+  currentUser.location = user.location;
+  currentUser.profilePicture = user.profilePicture;
+  localStorage.setItem('user', JSON.stringify(currentUser));
+}
+
+function updateProfileDisplay(user) {
+  document.getElementById('profileName').textContent = user.username;
+  document.getElementById('profileBio').textContent = user.bio || 'No bio yet';
+  document.getElementById('profileLocation').textContent = user.location || 'Kenya';
+  const picUrl = resolveMediaUrl(user.profilePicture) || user.profilePicture || 'https://via.placeholder.com/150';
+  document.getElementById('profileImage').src = picUrl;
+  document.getElementById('postsCount').textContent = user.postsCount ?? 0;
+  document.getElementById('followersCount').textContent = user.followersCount ?? (user.followers || []).length;
+  document.getElementById('followingCount').textContent = user.followingCount ?? (user.following || []).length;
+}
+
+function updateFollowButton(userId) {
+  const followBtn = document.getElementById('followBtn');
+  if (!followBtn || followBtn.style.display === 'none') return;
+  if (isFollowing(userId)) {
+    followBtn.textContent = '✓ Following';
+    followBtn.classList.add('following');
+  } else {
+    followBtn.textContent = 'Follow';
+    followBtn.classList.remove('following');
+  }
+}
+
+function renderSearchFollowButton(userId) {
+  if (!userId || sameUserId(userId, currentUser.id)) return '';
+  if (isFollowing(userId)) {
+    return `<button type="button" class="search-follow-btn following" data-follow-id="${escapeAttr(userId)}">Following</button>`;
+  }
+  return `<button type="button" class="search-follow-btn" data-follow-id="${escapeAttr(userId)}">Follow</button>`;
+}
+
+function bindSearchFollowButtons(container) {
+  container.querySelectorAll('.search-follow-btn').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const userId = btn.dataset.followId;
+      if (isFollowing(userId)) {
+        await unfollowUser(userId, { silent: true, refreshProfile: false });
+        btn.textContent = 'Follow';
+        btn.classList.remove('following');
+      } else {
+        const ok = await followUser(userId, { silent: true, refreshProfile: false });
+        if (ok) {
+          btn.textContent = 'Following';
+          btn.classList.add('following');
+        }
+      }
+    };
+  });
+}
+
 function escapeAttr(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -256,15 +320,18 @@ async function searchUsers(query, containerId) {
     container.innerHTML = users.map(user => `
       <div class="search-result-item" data-user-id="${escapeAttr(user.id)}" data-username="${escapeAttr(user.username)}">
         <img src="${escapeAttr(resolveMediaUrl(user.profilePicture) || user.profilePicture || 'https://via.placeholder.com/50')}" alt="">
-        <div>
+        <div class="search-result-info">
           <strong>${escapeAttr(user.username)}</strong>
           ${user.bio ? `<div style="font-size:12px;color:#8e8e8e;">${escapeAttr(user.bio)}</div>` : ''}
         </div>
+        ${renderSearchFollowButton(user.id)}
       </div>
     `).join('');
 
     container.querySelectorAll('.search-result-item').forEach(item => {
-      item.onclick = () => {
+      const info = item.querySelector('.search-result-info') || item;
+      info.style.cursor = 'pointer';
+      info.onclick = () => {
         viewUserProfile(item.dataset.userId, item.dataset.username);
         hideSearchResults(containerId);
         if (containerId === 'searchResults') {
@@ -275,6 +342,7 @@ async function searchUsers(query, containerId) {
       };
     });
 
+    bindSearchFollowButtons(container);
     container.classList.add('active');
   } catch (error) {
     console.error('Search error:', error);
@@ -307,22 +375,29 @@ async function searchSocial(query) {
     let html = '';
     if (users.length) {
       html += '<div class="search-result-section">Users</div>';
-      html += users.map(user => `
-        <div class="search-result-item" data-user-id="${escapeAttr(user.id || user._id)}" data-username="${escapeAttr(user.username)}">
+      html += users.map(user => {
+        const uid = user.id || user._id;
+        return `
+        <div class="search-result-item" data-user-id="${escapeAttr(uid)}" data-username="${escapeAttr(user.username)}">
           <img src="${escapeAttr(resolveMediaUrl(user.profilePicture) || 'https://via.placeholder.com/50')}" alt="">
-          <div><strong>${escapeAttr(user.username)}</strong></div>
+          <div class="search-result-info"><strong>${escapeAttr(user.username)}</strong></div>
+          ${renderSearchFollowButton(uid)}
         </div>
-      `).join('');
+      `;
+      }).join('');
     }
 
     container.innerHTML = html;
     container.querySelectorAll('.search-result-item').forEach(item => {
-      item.onclick = () => {
+      const info = item.querySelector('.search-result-info') || item;
+      info.style.cursor = 'pointer';
+      info.onclick = () => {
         viewUserProfile(item.dataset.userId, item.dataset.username);
         hideSearchResults('socialSearchResults');
         document.getElementById('socialSearchInput').value = '';
       };
     });
+    bindSearchFollowButtons(container);
     container.classList.add('active');
 
     if (posts.length) {
@@ -901,24 +976,14 @@ async function loadProfile() {
     const response = await fetch(`${API_URL}/users/${currentUser.id}`);
     const user = await response.json();
 
-    document.getElementById('profileName').textContent = user.username;
-    document.getElementById('profileBio').textContent = user.bio || 'No bio yet';
-    document.getElementById('profileLocation').textContent = user.location || 'Kenya';
-    const picUrl = resolveMediaUrl(user.profilePicture) || user.profilePicture || 'https://via.placeholder.com/150';
-    document.getElementById('profileImage').src = picUrl;
-    document.getElementById('followersCount').textContent = (user.followers || []).length;
-    document.getElementById('followingCount').textContent = (user.following || []).length;
+    updateProfileDisplay(user);
+    applyCurrentUserFromServer(user);
 
     document.getElementById('followBtn').style.display = 'none';
     document.getElementById('messageBtn').style.display = 'none';
     document.getElementById('changeProfilePicBtn').classList.add('visible');
 
-    currentUser.profilePicture = user.profilePicture;
-    currentUser.bio = user.bio;
-    currentUser.location = user.location;
-    localStorage.setItem('user', JSON.stringify(currentUser));
     updateSidebar();
-
     viewingUserProfile = null;
   } catch (error) {
     console.error('Error loading profile:', error);
@@ -928,34 +993,33 @@ async function loadProfile() {
 // View other user's profile
 async function viewUserProfile(userId, username) {
   try {
+    if (!userId || userId === 'undefined') return;
+
     const response = await fetch(`${API_URL}/users/${userId}`);
+    if (!response.ok) {
+      alert('User not found');
+      return;
+    }
     const user = await response.json();
 
-    document.getElementById('profileName').textContent = user.username;
-    document.getElementById('profileBio').textContent = user.bio || 'No bio yet';
-    document.getElementById('profileLocation').textContent = user.location || 'Kenya';
-    const picUrl = resolveMediaUrl(user.profilePicture) || user.profilePicture || 'https://via.placeholder.com/150';
-    document.getElementById('profileImage').src = picUrl;
-    document.getElementById('followersCount').textContent = (user.followers || []).length;
-    document.getElementById('followingCount').textContent = (user.following || []).length;
+    updateProfileDisplay(user);
 
     const followBtn = document.getElementById('followBtn');
     const messageBtn = document.getElementById('messageBtn');
 
-    followBtn.style.display = 'block';
-    messageBtn.style.display = 'block';
-    document.getElementById('changeProfilePicBtn').classList.remove('visible');
-    
-    // Check if already following
-    if ((currentUser.following || []).includes(userId)) {
-      followBtn.textContent = '✓ Following';
-      followBtn.classList.add('following');
+    if (sameUserId(userId, currentUser.id)) {
+      followBtn.style.display = 'none';
+      messageBtn.style.display = 'none';
+      document.getElementById('changeProfilePicBtn').classList.add('visible');
+      viewingUserProfile = null;
     } else {
-      followBtn.textContent = 'Follow';
-      followBtn.classList.remove('following');
+      followBtn.style.display = 'block';
+      messageBtn.style.display = 'block';
+      document.getElementById('changeProfilePicBtn').classList.remove('visible');
+      updateFollowButton(userId);
+      viewingUserProfile = { id: userId, name: user.username || username };
     }
-    
-    viewingUserProfile = { id: userId, name: username };
+
     switchPage('profile');
   } catch (error) {
     console.error('Error loading user profile:', error);
@@ -968,14 +1032,26 @@ function toggleFollowUser() {
     return;
   }
 
-  if ((currentUser.following || []).includes(viewingUserProfile.id)) {
+  if (isFollowing(viewingUserProfile.id)) {
     unfollowUser(viewingUserProfile.id);
   } else {
     followUser(viewingUserProfile.id);
   }
 }
 
-async function followUser(userId) {
+async function followUser(userId, options = {}) {
+  const { silent = false, refreshProfile = true } = options;
+
+  if (!ensureCurrentUserId()) {
+    alert('Please log in again');
+    return false;
+  }
+
+  if (sameUserId(userId, currentUser.id)) {
+    alert('You cannot follow yourself');
+    return false;
+  }
+
   try {
     const response = await fetch(`${API_URL}/users/${userId}/follow`, {
       method: 'POST',
@@ -983,23 +1059,38 @@ async function followUser(userId) {
       body: JSON.stringify({ currentUserId: currentUser.id })
     });
 
-    if (response.ok) {
-      currentUser.following.push(userId);
-      localStorage.setItem('user', JSON.stringify(currentUser));
-      
-      const followBtn = document.getElementById('followBtn');
-      followBtn.textContent = '✓ Following';
-      followBtn.classList.add('following');
-      
-      alert('Following user!');
+    const data = await response.json();
+
+    if (!response.ok) {
+      if (!silent) alert(data.error || 'Could not follow user');
+      return false;
     }
+
+    if (data.currentUser) applyCurrentUserFromServer(data.currentUser);
+
+    if (refreshProfile && viewingUserProfile && sameUserId(viewingUserProfile.id, userId) && data.targetUser) {
+      updateProfileDisplay(data.targetUser);
+      updateFollowButton(userId);
+    } else if (refreshProfile && !viewingUserProfile && data.currentUser) {
+      updateProfileDisplay(data.currentUser);
+    } else {
+      updateFollowButton(userId);
+    }
+
+    if (!silent) alert('Following user!');
+    return true;
   } catch (error) {
     console.error('Error following user:', error);
-    alert('Error following user');
+    if (!silent) alert('Error following user');
+    return false;
   }
 }
 
-async function unfollowUser(userId) {
+async function unfollowUser(userId, options = {}) {
+  const { silent = false, refreshProfile = true } = options;
+
+  if (!ensureCurrentUserId()) return false;
+
   try {
     const response = await fetch(`${API_URL}/users/${userId}/unfollow`, {
       method: 'POST',
@@ -1007,19 +1098,30 @@ async function unfollowUser(userId) {
       body: JSON.stringify({ currentUserId: currentUser.id })
     });
 
-    if (response.ok) {
-      currentUser.following = currentUser.following.filter(id => id !== userId);
-      localStorage.setItem('user', JSON.stringify(currentUser));
-      
-      const followBtn = document.getElementById('followBtn');
-      followBtn.textContent = 'Follow';
-      followBtn.classList.remove('following');
-      
-      alert('Unfollowed user!');
+    const data = await response.json();
+
+    if (!response.ok) {
+      if (!silent) alert(data.error || 'Could not unfollow');
+      return false;
     }
+
+    if (data.currentUser) applyCurrentUserFromServer(data.currentUser);
+
+    if (refreshProfile && viewingUserProfile && sameUserId(viewingUserProfile.id, userId) && data.targetUser) {
+      updateProfileDisplay(data.targetUser);
+      updateFollowButton(userId);
+    } else if (refreshProfile && !viewingUserProfile && data.currentUser) {
+      updateProfileDisplay(data.currentUser);
+    } else {
+      updateFollowButton(userId);
+    }
+
+    if (!silent) alert('Unfollowed user');
+    return true;
   } catch (error) {
     console.error('Error unfollowing user:', error);
-    alert('Error unfollowing user');
+    if (!silent) alert('Error unfollowing user');
+    return false;
   }
 }
 
@@ -1113,6 +1215,7 @@ async function saveProfile(event) {
     localStorage.setItem('user', JSON.stringify(currentUser));
 
     closeEditProfileModal();
+    await syncCurrentUser();
     await loadProfile();
     alert('Profile updated!');
   } catch (error) {
