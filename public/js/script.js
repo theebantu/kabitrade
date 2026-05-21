@@ -1,4 +1,5 @@
 const API_URL = 'https://kabitrade.onrender.com/api';
+const API_ORIGIN = API_URL.replace(/\/api$/, '');
 const socket = io('https://kabitrade.onrender.com',{
   reconnection: true,
   reconnectionDelay: 1000,
@@ -21,9 +22,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   currentUser = JSON.parse(user);
+  ensureCurrentUserId();
   currentUser.following = currentUser.following || [];
   currentUser.followers = currentUser.followers || [];
+  localStorage.setItem('user', JSON.stringify(currentUser));
   updateSidebar();
+  setupSocialFeedActions();
 
   if (lastPage) {
     switchPage(lastPage);
@@ -68,6 +72,53 @@ function switchPage(page) {
   else if (page === 'social') loadSocialFeed();
   else if (page === 'messages') {loadConversations();}
   else if (page === 'profile') loadProfile();
+}
+
+// ========== HELPERS ==========
+function ensureCurrentUserId() {
+  const token = localStorage.getItem('token');
+  currentUser.id = currentUser.id || currentUser._id || token;
+  return Boolean(currentUser.id);
+}
+
+function getPostAuthorId(author) {
+  if (!author) return null;
+  if (typeof author === 'string' && author !== 'undefined') return author;
+  return author.id || author._id || null;
+}
+
+function escapeAttr(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;');
+}
+
+function resolveMediaUrl(media) {
+  if (!media) return null;
+  if (media.startsWith('http://') || media.startsWith('https://')) return media;
+  return `${API_ORIGIN}${media.startsWith('/') ? media : '/' + media}`;
+}
+
+function setupSocialFeedActions() {
+  const feed = document.getElementById('socialFeed');
+  if (!feed || feed.dataset.actionsBound) return;
+  feed.dataset.actionsBound = 'true';
+
+  feed.addEventListener('click', (e) => {
+    const messageBtn = e.target.closest('[data-social-message]');
+    if (messageBtn) {
+      e.stopPropagation();
+      startConversation(messageBtn.dataset.userId, messageBtn.dataset.userName);
+      return;
+    }
+
+    const profileEl = e.target.closest('[data-social-profile]');
+    if (profileEl) {
+      viewUserProfile(profileEl.dataset.userId, profileEl.dataset.userName);
+    }
+  });
 }
 
 // ========== SIDEBAR ==========
@@ -301,19 +352,30 @@ async function loadSocialFeed(category = 'all') {
     feed.innerHTML = '';
 
     posts.forEach(post => {
+      const authorId = getPostAuthorId(post.author);
+      const authorName = post.author?.username || 'Unknown User';
+      const authorPic = post.author?.profilePicture || 'https://via.placeholder.com/150';
+      const mediaUrl = resolveMediaUrl(post.media);
+      const messageBtn = authorId && authorId !== currentUser.id
+        ? `<button type="button" class="action-btn" data-social-message data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}">💬</button>`
+        : '';
+      const profileAttrs = authorId
+        ? `data-social-profile data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}" style="cursor: pointer;"`
+        : 'style="cursor: default;"';
+
       const postHTML = `
         <div class="post">
           <div class="post-header">
-            <div class="post-author" onclick="viewUserProfile('${post.author._id || post.author.id}', '${post.author.username}')" style="cursor: pointer;">
-  <img src="${post.author.profilePicture}" alt="" class="author-pic">
+            <div class="post-author" ${profileAttrs}>
+  <img src="${escapeAttr(authorPic)}" alt="" class="author-pic">
   <div>
-    <div class="author-name">${post.author.username}</div>
-    <small style="color: #8e8e8e;">${post.category}</small>
+    <div class="author-name">${escapeAttr(authorName)}</div>
+    <small style="color: #8e8e8e;">${escapeAttr(post.category)}</small>
   </div>
 </div>
-  <button class="action-btn" onclick="startConversation('${post.author._id || post.author.id}', '${post.author.username}')">💬</button>
+  ${messageBtn}
           </div>
-          ${post.media ? `<img src="${post.media}" alt="" class="post-image" onerror="this.src='https://via.placeholder.com/400'">` : ''}
+          ${mediaUrl ? `<img src="${escapeAttr(mediaUrl)}" alt="" class="post-image" onerror="this.src='https://via.placeholder.com/400'">` : ''}
           <div class="post-content">
             <div class="post-text">${post.content || ''}</div>
           </div>
@@ -402,13 +464,19 @@ function closeSocialPostModal() {
 async function createSocialPost(event) {
   event.preventDefault();
 
+  if (!ensureCurrentUserId()) {
+    alert('Session expired. Please log in again.');
+    window.location.href = 'login.html';
+    return;
+  }
+
   const category = document.getElementById('socialCategory').value;
   const content = document.getElementById('postContent').value;
   const imageFile = document.getElementById('socialImage').files[0];
   const uploadStatus = document.getElementById('socialUploadStatus');
   const submitBtn = document.getElementById('socialSubmitBtn');
 
-  if (!category) {
+  if (!category || category === 'Select Category') {
     uploadStatus.textContent = '❌ Please select a category';
     uploadStatus.classList.add('error');
     uploadStatus.style.display = 'block';
@@ -433,10 +501,12 @@ async function createSocialPost(event) {
         body: formData
       });
 
-      if (uploadResponse.ok) {
-        const uploadData = await uploadResponse.json();
-        imageUrl = uploadData.imageUrl;
+      if (!uploadResponse.ok) {
+        throw new Error('Image upload failed');
       }
+
+      const uploadData = await uploadResponse.json();
+      imageUrl = uploadData.imageUrl || uploadData.absoluteUrl;
     }
 
     uploadStatus.textContent = '📤 Creating post...';
@@ -449,7 +519,7 @@ async function createSocialPost(event) {
         category,
         content,
         media: imageUrl,
-        mediaType: 'image'
+        mediaType: imageUrl ? 'image' : null
       })
     });
 
@@ -466,7 +536,8 @@ async function createSocialPost(event) {
         uploadStatus.style.display = 'none';
       }, 1500);
     } else {
-      throw new Error('Failed to create post');
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to create post');
     }
   } catch (error) {
     console.error('Error:', error);
@@ -527,8 +598,8 @@ async function openConversation(userId, username) {
 }
 
 function startConversation(userId, userName) {
-  if (!userId || userId === 'undefined') {
-    alert('Could not find this user. Please try again.');
+  if (!userId || userId === 'undefined' || userId === 'null') {
+    alert('Could not find this user. Please refresh the page and try again.');
     return;
   }
   if (userId === currentUser.id) {

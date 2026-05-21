@@ -92,6 +92,32 @@ function generateId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
+function resolveAuthorId(authorRef) {
+  if (authorRef == null || authorRef === '') return null;
+  if (typeof authorRef === 'string') return authorRef;
+  if (typeof authorRef === 'object') {
+    return authorRef.id || authorRef._id || null;
+  }
+  return null;
+}
+
+function formatPostAuthor(users, authorRef) {
+  const authorId = resolveAuthorId(authorRef);
+  const user = authorId ? users.find(u => u.id === authorId) : null;
+  return {
+    id: user?.id || authorId,
+    _id: user?.id || authorId,
+    username: user?.username || 'Unknown User',
+    profilePicture: user?.profilePicture || 'https://via.placeholder.com/150'
+  };
+}
+
+function normalizeSocialPostAuthor(post) {
+  const authorId = resolveAuthorId(post.author);
+  if (authorId) post.author = authorId;
+  return post;
+}
+
 // ========== IMAGE UPLOAD ROUTE ==========
 app.post('/api/upload', upload.single('image'), (req, res) => {
   try {
@@ -100,10 +126,12 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
     }
 
     const imageUrl = `/uploads/${req.file.filename}`;
+    const absoluteUrl = `${req.protocol}://${req.get('host')}${imageUrl}`;
 
     res.json({
       message: 'Image uploaded successfully',
       imageUrl: imageUrl,
+      absoluteUrl,
       filename: req.file.filename
     });
   } catch (error) {
@@ -403,10 +431,17 @@ app.post('/api/products/:productId/comment', (req, res) => {
 // CREATE SOCIAL POST
 app.post('/api/social/create', (req, res) => {
   try {
-    const { authorId, category, content, media, mediaType } = req.body;
+    const { category, content, media, mediaType } = req.body;
+    const authorId = resolveAuthorId(req.body.authorId ?? req.body.author);
 
-    if (!authorId || !category) {
-      return res.status(400).json({ error: 'Author and category required' });
+    if (!authorId || !category || category === 'Select Category') {
+      return res.status(400).json({ error: 'Valid author and category required' });
+    }
+
+    const users = readJsonFile(usersFile);
+    const authorUser = users.find(u => u.id === authorId);
+    if (!authorUser) {
+      return res.status(400).json({ error: 'Author not found. Please log in again.' });
     }
 
     const posts = readJsonFile(socialPostsFile);
@@ -415,13 +450,13 @@ app.post('/api/social/create', (req, res) => {
       id: generateId(),
       author: authorId,
       category,
-      content,
-      media,
-      mediaType,
+      content: content || '',
+      media: media || null,
+      mediaType: mediaType || null,
       likes: [],
       comments: [],
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
     };
 
     posts.push(newPost);
@@ -429,7 +464,10 @@ app.post('/api/social/create', (req, res) => {
 
     res.status(201).json({
       message: 'Post created successfully',
-      post: newPost
+      post: {
+        ...newPost,
+        author: formatPostAuthor(users, authorId)
+      }
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -442,20 +480,15 @@ app.get('/api/social/feed', (req, res) => {
     let posts = readJsonFile(socialPostsFile);
     const users = readJsonFile(usersFile);
 
-    posts = posts.filter(p => new Date(p.expiresAt) > new Date());
+    posts = posts
+      .filter(p => new Date(p.expiresAt) > new Date())
+      .map(normalizeSocialPostAuthor);
     writeJsonFile(socialPostsFile, posts);
 
-    const postsWithAuthor = posts.map(post => {
-      const author = users.find(u => u.id === post.author);
-      return {
-        ...post,
-        author: {
-          _id: author?.id,
-          username: author?.username,
-          profilePicture: author?.profilePicture
-        }
-      };
-    });
+    const postsWithAuthor = posts.map(post => ({
+      ...post,
+      author: formatPostAuthor(users, post.author)
+    }));
 
     res.json(postsWithAuthor.reverse());
   } catch (error) {
@@ -473,17 +506,11 @@ app.get('/api/social/category/:category', (req, res) => {
 
     const filtered = posts
       .filter(p => p.category === req.params.category)
-      .map(post => {
-        const author = users.find(u => u.id === post.author);
-        return {
-          ...post,
-          author: {
-            _id: author?.id,
-            username: author?.username,
-            profilePicture: author?.profilePicture
-          }
-        };
-      });
+      .map(normalizeSocialPostAuthor)
+      .map(post => ({
+        ...post,
+        author: formatPostAuthor(users, post.author)
+      }));
 
     res.json(filtered.reverse());
   } catch (error) {
