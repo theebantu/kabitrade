@@ -157,7 +157,9 @@ app.post('/api/auth/register', (req, res) => {
         id: newUser.id,
         username: newUser.username,
         email: newUser.email,
-        profilePicture: newUser.profilePicture
+        profilePicture: newUser.profilePicture,
+        following: newUser.following,
+        followers: newUser.followers
       }
     });
   } catch (error) {
@@ -192,7 +194,9 @@ app.post('/api/auth/login', (req, res) => {
         id: user.id,
         username: user.username,
         email: user.email,
-        profilePicture: user.profilePicture
+        profilePicture: user.profilePicture,
+        following: user.following || [],
+        followers: user.followers || []
       }
     });
   } catch (error) {

@@ -21,6 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   currentUser = JSON.parse(user);
+  currentUser.following = currentUser.following || [];
+  currentUser.followers = currentUser.followers || [];
   updateSidebar();
 
   if (lastPage) {
@@ -91,7 +93,7 @@ async function loadMarketplaceFeed() {
     <img src="${product.seller.profilePicture}" alt="" class="author-pic">
     <div class="seller-name">${product.seller.username}</div>
   </div>
-  <button class="action-btn" onclick="sendMessageToSeller('${product.seller._id || product.seller.id}', '${product.seller.username}')">💬</button>
+  <button class="action-btn" onclick="startConversation('${product.seller._id || product.seller.id}', '${product.seller.username}')">💬</button>
 </div>
           <img src="${product.image}" alt="" class="product-image" onerror="this.src='https://via.placeholder.com/400'">
           <div class="product-content">
@@ -302,13 +304,14 @@ async function loadSocialFeed(category = 'all') {
       const postHTML = `
         <div class="post">
           <div class="post-header">
-            <div class="post-author" onclick="viewUserProfile('${post.author._id}', '${post.author.username}')" style="cursor: pointer;">
+            <div class="post-author" onclick="viewUserProfile('${post.author._id || post.author.id}', '${post.author.username}')" style="cursor: pointer;">
   <img src="${post.author.profilePicture}" alt="" class="author-pic">
   <div>
     <div class="author-name">${post.author.username}</div>
     <small style="color: #8e8e8e;">${post.category}</small>
   </div>
 </div>
+  <button class="action-btn" onclick="startConversation('${post.author._id || post.author.id}', '${post.author.username}')">💬</button>
           </div>
           ${post.media ? `<img src="${post.media}" alt="" class="post-image" onerror="this.src='https://via.placeholder.com/400'">` : ''}
           <div class="post-content">
@@ -523,16 +526,24 @@ async function openConversation(userId, username) {
   area.scrollTop = area.scrollHeight;
 }
 
-function sendMessageToSeller(sellerId, sellerName) {
-  if (!sellerId || sellerId === 'undefined') {
-    alert('Could not find this seller. Please try again.');
+function startConversation(userId, userName) {
+  if (!userId || userId === 'undefined') {
+    alert('Could not find this user. Please try again.');
     return;
   }
-  currentChat = { id: sellerId, name: sellerName };
+  if (userId === currentUser.id) {
+    alert('You cannot message yourself.');
+    return;
+  }
+  currentChat = { id: userId, name: userName };
   switchPage('messages');
-  document.getElementById('chatHeader').innerHTML = `<h3>${sellerName}</h3>`;
+  document.getElementById('chatHeader').innerHTML = `<h3>${userName}</h3>`;
   document.getElementById('messagesArea').innerHTML = '<p>Start chatting!</p>';
   loadConversations();
+}
+
+function sendMessageToSeller(sellerId, sellerName) {
+  startConversation(sellerId, sellerName);
 }
 
 async function sendMessage() {
@@ -623,7 +634,7 @@ async function viewUserProfile(userId, username) {
     messageBtn.style.display = 'block';
     
     // Check if already following
-    if (currentUser.following.includes(userId)) {
+    if ((currentUser.following || []).includes(userId)) {
       followBtn.textContent = '✓ Following';
       followBtn.classList.add('following');
     } else {
@@ -644,7 +655,7 @@ function toggleFollowUser() {
     return;
   }
 
-  if (currentUser.following.includes(viewingUserProfile.id)) {
+  if ((currentUser.following || []).includes(viewingUserProfile.id)) {
     unfollowUser(viewingUserProfile.id);
   } else {
     followUser(viewingUserProfile.id);
@@ -704,11 +715,7 @@ function openDirectMessage() {
     alert('No user selected');
     return;
   }
-
-  currentChat = { id: viewingUserProfile.id, name: viewingUserProfile.name };
-  switchPage('messages');
-  document.getElementById('chatHeader').innerHTML = `<h3>💬 ${viewingUserProfile.name}</h3>`;
-  document.getElementById('messagesArea').innerHTML = '<p>Start a conversation!</p>';
+  startConversation(viewingUserProfile.id, viewingUserProfile.name);
 }
 
 function editProfile() {
