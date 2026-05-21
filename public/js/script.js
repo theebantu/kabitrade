@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateSidebar();
   setupSocialFeedActions();
   setupMarketplaceFeedActions();
+  setupSearchListeners();
 
   if (lastPage) {
     switchPage(lastPage);
@@ -183,7 +184,212 @@ async function syncCurrentUser() {
 // ========== SIDEBAR ==========
 function updateSidebar() {
   document.getElementById('sidebarUsername').textContent = currentUser.username;
-  document.getElementById('sidebarProfilePic').src = currentUser.profilePicture || 'https://via.placeholder.com/50';
+  const pic = resolveMediaUrl(currentUser.profilePicture) || currentUser.profilePicture || 'https://via.placeholder.com/50';
+  document.getElementById('sidebarProfilePic').src = pic;
+}
+
+function setupSearchListeners() {
+  const searchInput = document.getElementById('searchInput');
+  const socialSearchInput = document.getElementById('socialSearchInput');
+
+  if (searchInput) {
+    let searchTimeout;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => {
+        searchUsers(searchInput.value.trim(), 'searchResults');
+      }, 300);
+    });
+    searchInput.addEventListener('focus', () => {
+      if (searchInput.value.trim()) searchUsers(searchInput.value.trim(), 'searchResults');
+    });
+  }
+
+  if (socialSearchInput) {
+    let socialTimeout;
+    socialSearchInput.addEventListener('input', () => {
+      clearTimeout(socialTimeout);
+      socialTimeout = setTimeout(() => {
+        searchSocial(socialSearchInput.value.trim());
+      }, 300);
+    });
+    socialSearchInput.addEventListener('focus', () => {
+      if (socialSearchInput.value.trim()) searchSocial(socialSearchInput.value.trim());
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.search-bar')) {
+      hideSearchResults('searchResults');
+      hideSearchResults('socialSearchResults');
+    }
+  });
+}
+
+function hideSearchResults(containerId) {
+  const el = document.getElementById(containerId);
+  if (el) {
+    el.classList.remove('active');
+    el.innerHTML = '';
+  }
+}
+
+async function searchUsers(query, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  if (!query) {
+    hideSearchResults(containerId);
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/users/search?q=${encodeURIComponent(query)}`);
+    const users = await response.json();
+
+    if (!users.length) {
+      container.innerHTML = '<div class="search-no-results">No users found</div>';
+      container.classList.add('active');
+      return;
+    }
+
+    container.innerHTML = users.map(user => `
+      <div class="search-result-item" data-user-id="${escapeAttr(user.id)}" data-username="${escapeAttr(user.username)}">
+        <img src="${escapeAttr(resolveMediaUrl(user.profilePicture) || user.profilePicture || 'https://via.placeholder.com/50')}" alt="">
+        <div>
+          <strong>${escapeAttr(user.username)}</strong>
+          ${user.bio ? `<div style="font-size:12px;color:#8e8e8e;">${escapeAttr(user.bio)}</div>` : ''}
+        </div>
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.search-result-item').forEach(item => {
+      item.onclick = () => {
+        viewUserProfile(item.dataset.userId, item.dataset.username);
+        hideSearchResults(containerId);
+        if (containerId === 'searchResults') {
+          document.getElementById('searchInput').value = '';
+        } else {
+          document.getElementById('socialSearchInput').value = '';
+        }
+      };
+    });
+
+    container.classList.add('active');
+  } catch (error) {
+    console.error('Search error:', error);
+  }
+}
+
+async function searchSocial(query) {
+  const container = document.getElementById('socialSearchResults');
+  if (!container) return;
+
+  if (!query) {
+    hideSearchResults('socialSearchResults');
+    loadSocialFeed();
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/social/search?q=${encodeURIComponent(query)}`);
+    const data = await response.json();
+    const users = data.users || [];
+    const posts = data.posts || [];
+
+    if (!users.length && !posts.length) {
+      container.innerHTML = '<div class="search-no-results">No users or posts found</div>';
+      container.classList.add('active');
+      document.getElementById('socialFeed').innerHTML = '<p style="padding:20px;text-align:center;color:#8e8e8e;">No posts match your search</p>';
+      return;
+    }
+
+    let html = '';
+    if (users.length) {
+      html += '<div class="search-result-section">Users</div>';
+      html += users.map(user => `
+        <div class="search-result-item" data-user-id="${escapeAttr(user.id || user._id)}" data-username="${escapeAttr(user.username)}">
+          <img src="${escapeAttr(resolveMediaUrl(user.profilePicture) || 'https://via.placeholder.com/50')}" alt="">
+          <div><strong>${escapeAttr(user.username)}</strong></div>
+        </div>
+      `).join('');
+    }
+
+    container.innerHTML = html;
+    container.querySelectorAll('.search-result-item').forEach(item => {
+      item.onclick = () => {
+        viewUserProfile(item.dataset.userId, item.dataset.username);
+        hideSearchResults('socialSearchResults');
+        document.getElementById('socialSearchInput').value = '';
+      };
+    });
+    container.classList.add('active');
+
+    if (posts.length) {
+      renderSocialPosts(posts, document.getElementById('socialFeed'));
+    } else {
+      document.getElementById('socialFeed').innerHTML = '<p style="padding:20px;text-align:center;color:#8e8e8e;">No posts match — try a user name above</p>';
+    }
+  } catch (error) {
+    console.error('Social search error:', error);
+  }
+}
+
+function renderSocialPosts(posts, feed) {
+  if (!feed) return;
+  feed.innerHTML = '';
+
+  posts.forEach(post => {
+    const authorId = getPostAuthorId(post.author);
+    const authorName = post.author?.username || 'Unknown User';
+    const authorPic = resolveMediaUrl(post.author?.profilePicture) || post.author?.profilePicture || 'https://via.placeholder.com/150';
+    const mediaUrl = resolveMediaUrl(post.media);
+    const messageBtn = authorId && !sameUserId(authorId, currentUser.id)
+      ? `<button type="button" class="action-btn" data-social-message data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}">💬 Message</button>`
+      : '';
+    const profileAttrs = authorId
+      ? `data-social-profile data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}" style="cursor: pointer;"`
+      : 'style="cursor: default;"';
+
+    feed.innerHTML += `
+      <div class="post">
+        <div class="post-header">
+          <div class="post-author" ${profileAttrs}>
+            <img src="${escapeAttr(authorPic)}" alt="" class="author-pic" onerror="this.src='https://via.placeholder.com/150'">
+            <div>
+              <div class="author-name">${escapeAttr(authorName)}</div>
+              <small style="color: #8e8e8e;">${escapeAttr(post.category)}</small>
+            </div>
+          </div>
+          ${messageBtn}
+        </div>
+        ${mediaUrl ? `<img src="${escapeAttr(mediaUrl)}" alt="" class="post-image" onerror="this.src='https://via.placeholder.com/400'">` : ''}
+        <div class="post-content">
+          <div class="post-text">${post.content || ''}</div>
+        </div>
+        <div class="post-actions">
+          <button class="action-btn ${post.likes.includes(currentUser.id) ? 'liked' : ''}" onclick="likeSocialPost('${post.id}')">
+            ❤️ ${post.likes.length}
+          </button>
+          <button class="action-btn" onclick="toggleCommentSection('social-${post.id}')">
+            💬 ${post.comments.length}
+          </button>
+        </div>
+        <div id="social-${post.id}" class="comments-section" style="display:none;">
+          ${post.comments.map(comment => `
+            <div class="comment">
+              <span class="comment-author">${comment.username}:</span>
+              ${comment.comment}
+            </div>
+          `).join('')}
+          <div class="comment-input-area">
+            <input type="text" placeholder="Add comment..." id="socialCommentInput-${post.id}">
+            <button class="comment-submit" onclick="addSocialComment('${post.id}')">Post</button>
+          </div>
+        </div>
+      </div>
+    `;
+  });
 }
 
 // ========== MARKETPLACE ==========
@@ -424,61 +630,11 @@ async function loadSocialFeed(category = 'all') {
     const response = await fetch(url);
     const posts = await response.json();
 
-    const feed = document.getElementById('socialFeed');
-    feed.innerHTML = '';
+    hideSearchResults('socialSearchResults');
+    const socialInput = document.getElementById('socialSearchInput');
+    if (socialInput) socialInput.value = '';
 
-    posts.forEach(post => {
-      const authorId = getPostAuthorId(post.author);
-      const authorName = post.author?.username || 'Unknown User';
-      const authorPic = post.author?.profilePicture || 'https://via.placeholder.com/150';
-      const mediaUrl = resolveMediaUrl(post.media);
-      const messageBtn = authorId && !sameUserId(authorId, currentUser.id)
-        ? `<button type="button" class="action-btn" data-social-message data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}">💬 Message</button>`
-        : '';
-      const profileAttrs = authorId
-        ? `data-social-profile data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}" style="cursor: pointer;"`
-        : 'style="cursor: default;"';
-
-      const postHTML = `
-        <div class="post">
-          <div class="post-header">
-            <div class="post-author" ${profileAttrs}>
-  <img src="${escapeAttr(authorPic)}" alt="" class="author-pic">
-  <div>
-    <div class="author-name">${escapeAttr(authorName)}</div>
-    <small style="color: #8e8e8e;">${escapeAttr(post.category)}</small>
-  </div>
-</div>
-  ${messageBtn}
-          </div>
-          ${mediaUrl ? `<img src="${escapeAttr(mediaUrl)}" alt="" class="post-image" onerror="this.src='https://via.placeholder.com/400'">` : ''}
-          <div class="post-content">
-            <div class="post-text">${post.content || ''}</div>
-          </div>
-          <div class="post-actions">
-            <button class="action-btn ${post.likes.includes(currentUser.id) ? 'liked' : ''}" onclick="likeSocialPost('${post.id}')">
-              ❤️ ${post.likes.length}
-            </button>
-            <button class="action-btn" onclick="toggleCommentSection('social-${post.id}')">
-              💬 ${post.comments.length}
-            </button>
-          </div>
-          <div id="social-${post.id}" class="comments-section" style="display:none;">
-            ${post.comments.map(comment => `
-              <div class="comment">
-                <span class="comment-author">${comment.username}:</span>
-                ${comment.comment}
-              </div>
-            `).join('')}
-            <div class="comment-input-area">
-              <input type="text" placeholder="Add comment..." id="socialCommentInput-${post.id}">
-              <button class="comment-submit" onclick="addSocialComment('${post.id}')">Post</button>
-            </div>
-          </div>
-        </div>
-      `;
-      feed.innerHTML += postHTML;
-    });
+    renderSocialPosts(posts, document.getElementById('socialFeed'));
   } catch (error) {
     console.error('Error loading social feed:', error);
   }
@@ -748,14 +904,21 @@ async function loadProfile() {
     document.getElementById('profileName').textContent = user.username;
     document.getElementById('profileBio').textContent = user.bio || 'No bio yet';
     document.getElementById('profileLocation').textContent = user.location || 'Kenya';
-    document.getElementById('profileImage').src = user.profilePicture || 'https://via.placeholder.com/150';
-    document.getElementById('followersCount').textContent = user.followers.length;
-    document.getElementById('followingCount').textContent = user.following.length;
-    
-    // Hide follow button for own profile
+    const picUrl = resolveMediaUrl(user.profilePicture) || user.profilePicture || 'https://via.placeholder.com/150';
+    document.getElementById('profileImage').src = picUrl;
+    document.getElementById('followersCount').textContent = (user.followers || []).length;
+    document.getElementById('followingCount').textContent = (user.following || []).length;
+
     document.getElementById('followBtn').style.display = 'none';
     document.getElementById('messageBtn').style.display = 'none';
-    
+    document.getElementById('changeProfilePicBtn').classList.add('visible');
+
+    currentUser.profilePicture = user.profilePicture;
+    currentUser.bio = user.bio;
+    currentUser.location = user.location;
+    localStorage.setItem('user', JSON.stringify(currentUser));
+    updateSidebar();
+
     viewingUserProfile = null;
   } catch (error) {
     console.error('Error loading profile:', error);
@@ -771,16 +934,17 @@ async function viewUserProfile(userId, username) {
     document.getElementById('profileName').textContent = user.username;
     document.getElementById('profileBio').textContent = user.bio || 'No bio yet';
     document.getElementById('profileLocation').textContent = user.location || 'Kenya';
-    document.getElementById('profileImage').src = user.profilePicture || 'https://via.placeholder.com/150';
-    document.getElementById('followersCount').textContent = user.followers.length;
-    document.getElementById('followingCount').textContent = user.following.length;
-    
-    // Show follow button for other users
+    const picUrl = resolveMediaUrl(user.profilePicture) || user.profilePicture || 'https://via.placeholder.com/150';
+    document.getElementById('profileImage').src = picUrl;
+    document.getElementById('followersCount').textContent = (user.followers || []).length;
+    document.getElementById('followingCount').textContent = (user.following || []).length;
+
     const followBtn = document.getElementById('followBtn');
     const messageBtn = document.getElementById('messageBtn');
-    
+
     followBtn.style.display = 'block';
     messageBtn.style.display = 'block';
+    document.getElementById('changeProfilePicBtn').classList.remove('visible');
     
     // Check if already following
     if ((currentUser.following || []).includes(userId)) {
@@ -874,29 +1038,88 @@ function editProfile() {
     loadProfile();
     return;
   }
-
-  const newBio = prompt('Enter your bio:');
-  if (newBio !== null) {
-    updateProfileBio(newBio);
-  }
+  showEditProfileModal();
 }
 
-async function updateProfileBio(bio) {
+function showEditProfileModal() {
+  if (viewingUserProfile) return;
+
+  const pic = resolveMediaUrl(currentUser.profilePicture) || currentUser.profilePicture || 'https://via.placeholder.com/150';
+  document.getElementById('editProfilePreview').src = pic;
+  document.getElementById('editProfileBio').value = currentUser.bio || '';
+  document.getElementById('editProfileLocation').value = currentUser.location || 'Kenya';
+  document.getElementById('editProfilePic').value = '';
+  document.getElementById('editProfileModal').classList.add('show');
+}
+
+function closeEditProfileModal() {
+  document.getElementById('editProfileModal').classList.remove('show');
+}
+
+function previewProfilePic(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    document.getElementById('editProfilePreview').src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function uploadImageFile(file) {
+  const formData = new FormData();
+  formData.append('image', file);
+  const response = await fetch(`${API_URL}/upload`, { method: 'POST', body: formData });
+  if (!response.ok) throw new Error('Image upload failed');
+  const data = await response.json();
+  return data.imageUrl || data.absoluteUrl;
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  if (!ensureCurrentUserId()) return;
+
+  const submitBtn = document.getElementById('saveProfileBtn');
+  submitBtn.disabled = true;
+
   try {
+    let profilePicture = currentUser.profilePicture;
+    const picFile = document.getElementById('editProfilePic').files[0];
+
+    if (picFile) {
+      profilePicture = await uploadImageFile(picFile);
+    }
+
+    const bio = document.getElementById('editProfileBio').value;
+    const location = document.getElementById('editProfileLocation').value;
+
     const response = await fetch(`${API_URL}/users/${currentUser.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bio })
+      body: JSON.stringify({ bio, location, profilePicture })
     });
 
-    if (response.ok) {
-      currentUser.bio = bio;
-      localStorage.setItem('user', JSON.stringify(currentUser));
-      loadProfile();
-      alert('Profile updated!');
+    const data = await response.json();
+
+    if (!response.ok) {
+      alert(data.error || 'Failed to update profile');
+      return;
     }
+
+    const user = data.user || {};
+    currentUser.bio = user.bio ?? bio;
+    currentUser.location = user.location ?? location;
+    currentUser.profilePicture = user.profilePicture ?? profilePicture;
+    localStorage.setItem('user', JSON.stringify(currentUser));
+
+    closeEditProfileModal();
+    await loadProfile();
+    alert('Profile updated!');
   } catch (error) {
     console.error('Error updating profile:', error);
+    alert('Could not update profile. Try again.');
+  } finally {
+    submitBtn.disabled = false;
   }
 }
 

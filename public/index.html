@@ -45,7 +45,8 @@
       <section id="marketplace-page" class="page active">
         <div class="page-header">
           <div class="search-bar">
-            <input type="text" id="searchInput" placeholder="🔍 Search users...">
+            <input type="text" id="searchInput" placeholder="🔍 Search users..." autocomplete="off">
+            <div id="searchResults" class="search-results"></div>
           </div>
           <button class="btn-primary" onclick="showUploadModal()">+ Upload Item</button>
         </div>
@@ -58,6 +59,10 @@
       <!-- Social Page -->
       <section id="social-page" class="page">
         <div class="page-header">
+          <div class="search-bar">
+            <input type="text" id="socialSearchInput" placeholder="🔍 Search users or posts..." autocomplete="off">
+            <div id="socialSearchResults" class="search-results"></div>
+          </div>
           <button class="btn-primary" onclick="showSocialPostModal()">+ Create Post</button>
         </div>
 
@@ -106,7 +111,10 @@
 <section id="profile-page" class="page">
   <div class="profile-container">
     <div class="profile-header">
-      <img id="profileImage" src="https://via.placeholder.com/150" alt="Profile" class="profile-pic-large">
+      <div class="profile-pic-wrap">
+        <img id="profileImage" src="https://via.placeholder.com/150" alt="Profile" class="profile-pic-large">
+        <button type="button" id="changeProfilePicBtn" class="change-pic-btn" onclick="showEditProfileModal()" title="Change photo">📷</button>
+      </div>
       <div class="profile-info">
         <h2 id="profileName">Loading...</h2>
         <p id="profileBio">Loading...</p>
@@ -180,6 +188,24 @@
     </div>
   </div>
 
+  <!-- Edit Profile Modal -->
+  <div id="editProfileModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeEditProfileModal()">&times;</span>
+      <h2>Edit Profile</h2>
+      <form onsubmit="saveProfile(event)">
+        <div class="profile-edit-pic">
+          <img id="editProfilePreview" src="https://via.placeholder.com/150" alt="Preview">
+          <label for="editProfilePic" class="btn-primary" style="display:inline-block; text-align:center; cursor:pointer;">Choose profile photo</label>
+          <input type="file" id="editProfilePic" accept="image/*" style="display:none" onchange="previewProfilePic(event)">
+        </div>
+        <textarea id="editProfileBio" placeholder="Bio" rows="3"></textarea>
+        <input type="text" id="editProfileLocation" placeholder="Location (e.g. Kenya)">
+        <button type="submit" class="btn-primary" id="saveProfileBtn">Save Profile</button>
+      </form>
+    </div>
+  </div>
+
   <!-- Social Post Modal -->
   <div id="socialPostModal" class="modal">
     <div class="modal-content">
@@ -223,6 +249,6 @@
   </div>
 
   <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
-  <script src="js/script.js?v=3"></script>
+  <script src="js/script.js?v=4"></script>
 </body>
 </html>

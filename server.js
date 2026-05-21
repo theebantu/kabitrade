@@ -747,6 +747,79 @@ app.get('/api/messages/:userId1/:userId2', async (req, res) => {
 
 // ========== USER ROUTES ==========
 
+// SEARCH USERS (must be before /api/users/:userId)
+app.get('/api/users/search', async (req, res) => {
+  try {
+    const query = (req.query.q || '').trim().toLowerCase();
+    if (!query) {
+      return res.json([]);
+    }
+
+    const users = await store.get('users');
+    const results = users
+      .filter(u =>
+        u.username.toLowerCase().includes(query) ||
+        (u.email && u.email.toLowerCase().includes(query)) ||
+        (u.bio && u.bio.toLowerCase().includes(query))
+      )
+      .map(u => {
+        const { password, ...safe } = u;
+        return {
+          id: safe.id,
+          username: safe.username,
+          email: safe.email,
+          bio: safe.bio,
+          profilePicture: safe.profilePicture,
+          location: safe.location
+        };
+      });
+
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// SEARCH SOCIAL (users + posts)
+app.get('/api/social/search', async (req, res) => {
+  try {
+    const query = (req.query.q || '').trim().toLowerCase();
+    if (!query) {
+      return res.json({ users: [], posts: [] });
+    }
+
+    const users = await store.get('users');
+    let posts = await store.get('socialPosts');
+
+    const matchedUsers = users
+      .filter(u =>
+        u.username.toLowerCase().includes(query) ||
+        (u.email && u.email.toLowerCase().includes(query))
+      )
+      .map(u => formatPostAuthor(users, u.id));
+
+    posts = posts
+      .filter(p => new Date(p.expiresAt) > new Date())
+      .map(normalizeSocialPostAuthor)
+      .filter(post => {
+        const author = formatPostAuthor(users, post.author);
+        return (
+          (post.content && post.content.toLowerCase().includes(query)) ||
+          (post.category && post.category.toLowerCase().includes(query)) ||
+          author.username.toLowerCase().includes(query)
+        );
+      })
+      .map(post => ({
+        ...post,
+        author: formatPostAuthor(users, post.author)
+      }));
+
+    res.json({ users: matchedUsers, posts: posts.reverse() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET USER PROFILE
 app.get('/api/users/:userId', async (req, res) => {
   try {
@@ -759,22 +832,6 @@ app.get('/api/users/:userId', async (req, res) => {
 
     const { password, ...safeUser } = user;
     res.json(safeUser);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// SEARCH USERS
-app.get('/api/users/search/:query', async (req, res) => {
-  try {
-    const users = await store.get('users');
-    const query = req.params.query.toLowerCase();
-
-    const results = users.filter(u =>
-      u.username.toLowerCase().includes(query)
-    );
-
-    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -847,13 +904,14 @@ app.put('/api/users/:userId', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (bio) user.bio = bio;
+    if (bio !== undefined) user.bio = bio;
     if (profilePicture) user.profilePicture = profilePicture;
-    if (location) user.location = location;
+    if (location !== undefined) user.location = location;
 
     await store.set('users', users);
 
-    res.json({ message: 'Profile updated', user });
+    const { password, ...safeUser } = user;
+    res.json({ message: 'Profile updated', user: safeUser });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
