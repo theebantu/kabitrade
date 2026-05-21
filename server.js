@@ -92,6 +92,16 @@ function normalizeSocialPostAuthor(post) {
   return post;
 }
 
+function normalizeProductSeller(product) {
+  const sellerId = resolveAuthorId(product.seller);
+  if (sellerId) product.seller = sellerId;
+  return product;
+}
+
+function formatProductSeller(users, sellerRef) {
+  return formatPostAuthor(users, sellerRef);
+}
+
 // ========== IMAGE UPLOAD ROUTE ==========
 app.post('/api/upload', upload.single('image'), async (req, res) => {
   try {
@@ -282,10 +292,16 @@ app.post('/api/auth/reset-password', async (req, res) => {
 // UPLOAD PRODUCT
 app.post('/api/products/upload', async (req, res) => {
   try {
-    const { title, description, price, category, image, sellerId } = req.body;
+    const { title, description, price, category, image } = req.body;
+    const sellerId = resolveAuthorId(req.body.sellerId ?? req.body.seller);
 
     if (!title || !description || !price || !category || !image || !sellerId) {
       return res.status(400).json({ error: 'All fields required' });
+    }
+
+    const users = await store.get('users');
+    if (!users.find(u => u.id === sellerId)) {
+      return res.status(400).json({ error: 'Seller not found. Please log in again.' });
     }
 
     const products = await store.get('products');
@@ -321,17 +337,12 @@ app.get('/api/products/feed', async (req, res) => {
     const products = await store.get('products');
     const users = await store.get('users');
 
-    const productsWithSeller = products.map(product => {
-      const seller = users.find(u => u.id === product.seller);
-      return {
+    const productsWithSeller = products
+      .map(normalizeProductSeller)
+      .map(product => ({
         ...product,
-        seller: {
-          _id: seller?.id,
-          username: seller?.username,
-          profilePicture: seller?.profilePicture
-        }
-      };
-    });
+        seller: formatProductSeller(users, product.seller)
+      }));
 
     res.json(productsWithSeller.reverse());
   } catch (error) {
@@ -347,17 +358,11 @@ app.get('/api/products/category/:category', async (req, res) => {
 
     const filtered = products
       .filter(p => p.category === req.params.category)
-      .map(product => {
-        const seller = users.find(u => u.id === product.seller);
-        return {
-          ...product,
-          seller: {
-            _id: seller?.id,
-            username: seller?.username,
-            profilePicture: seller?.profilePicture
-          }
-        };
-      });
+      .map(normalizeProductSeller)
+      .map(product => ({
+        ...product,
+        seller: formatProductSeller(users, product.seller)
+      }));
 
     res.json(filtered.reverse());
   } catch (error) {
@@ -752,7 +757,8 @@ app.get('/api/users/:userId', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json(user);
+    const { password, ...safeUser } = user;
+    res.json(safeUser);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

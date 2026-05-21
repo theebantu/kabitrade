@@ -11,7 +11,7 @@ let currentPage = 'marketplace';
 let currentChat = null;
 
 // ========== INITIALIZATION ==========
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   const token = localStorage.getItem('token');
   const user = localStorage.getItem('user');
   const lastPage = localStorage.getItem('lastPage');
@@ -26,8 +26,11 @@ document.addEventListener('DOMContentLoaded', () => {
   currentUser.following = currentUser.following || [];
   currentUser.followers = currentUser.followers || [];
   localStorage.setItem('user', JSON.stringify(currentUser));
+
+  await syncCurrentUser();
   updateSidebar();
   setupSocialFeedActions();
+  setupMarketplaceFeedActions();
 
   if (lastPage) {
     switchPage(lastPage);
@@ -83,8 +86,18 @@ function ensureCurrentUserId() {
 
 function getPostAuthorId(author) {
   if (!author) return null;
-  if (typeof author === 'string' && author !== 'undefined') return author;
-  return author.id || author._id || null;
+  if (typeof author === 'string' && author !== 'undefined' && author !== 'null') return author;
+  const id = author.id || author._id || null;
+  return id && id !== 'undefined' && id !== 'null' ? String(id) : null;
+}
+
+function getSellerId(product) {
+  return getPostAuthorId(product?.seller);
+}
+
+function sameUserId(a, b) {
+  if (!a || !b) return false;
+  return String(a) === String(b);
 }
 
 function escapeAttr(value) {
@@ -121,6 +134,52 @@ function setupSocialFeedActions() {
   });
 }
 
+function setupMarketplaceFeedActions() {
+  const feed = document.getElementById('marketplaceFeed');
+  if (!feed || feed.dataset.actionsBound) return;
+  feed.dataset.actionsBound = 'true';
+
+  feed.addEventListener('click', (e) => {
+    const messageBtn = e.target.closest('[data-market-message]');
+    if (messageBtn) {
+      e.stopPropagation();
+      startConversation(messageBtn.dataset.userId, messageBtn.dataset.userName);
+      return;
+    }
+
+    const sellerEl = e.target.closest('[data-market-seller]');
+    if (sellerEl) {
+      viewUserProfile(sellerEl.dataset.userId, sellerEl.dataset.userName);
+    }
+  });
+}
+
+async function syncCurrentUser() {
+  if (!ensureCurrentUserId()) return false;
+  try {
+    const response = await fetch(`${API_URL}/users/${currentUser.id}`);
+    if (!response.ok) return false;
+    const user = await response.json();
+    currentUser = {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      profilePicture: user.profilePicture,
+      following: user.following || [],
+      followers: user.followers || [],
+      bio: user.bio,
+      location: user.location
+    };
+    localStorage.setItem('user', JSON.stringify(currentUser));
+    localStorage.setItem('token', user.id);
+    updateSidebar();
+    return true;
+  } catch (error) {
+    console.error('Could not sync user profile:', error);
+    return false;
+  }
+}
+
 // ========== SIDEBAR ==========
 function updateSidebar() {
   document.getElementById('sidebarUsername').textContent = currentUser.username;
@@ -137,16 +196,27 @@ async function loadMarketplaceFeed() {
     feed.innerHTML = '';
 
     products.forEach(product => {
+      const sellerId = getSellerId(product);
+      const sellerName = product.seller?.username || 'Unknown User';
+      const sellerPic = product.seller?.profilePicture || 'https://via.placeholder.com/150';
+      const imageUrl = resolveMediaUrl(product.image) || product.image;
+      const messageBtn = sellerId && !sameUserId(sellerId, currentUser.id)
+        ? `<button type="button" class="action-btn" data-market-message data-user-id="${escapeAttr(sellerId)}" data-user-name="${escapeAttr(sellerName)}">💬 Message</button>`
+        : '';
+      const sellerAttrs = sellerId
+        ? `data-market-seller data-user-id="${escapeAttr(sellerId)}" data-user-name="${escapeAttr(sellerName)}" style="cursor: pointer;"`
+        : 'style="cursor: default;"';
+
       const productHTML = `
         <div class="product">
           <div class="product-header">
-  <div class="product-seller" onclick="viewUserProfile('${product.seller._id}', '${product.seller.username}')" style="cursor: pointer;">
-    <img src="${product.seller.profilePicture}" alt="" class="author-pic">
-    <div class="seller-name">${product.seller.username}</div>
+  <div class="product-seller" ${sellerAttrs}>
+    <img src="${escapeAttr(sellerPic)}" alt="" class="author-pic">
+    <div class="seller-name">${escapeAttr(sellerName)}</div>
   </div>
-  <button class="action-btn" onclick="startConversation('${product.seller._id || product.seller.id}', '${product.seller.username}')">💬</button>
+  ${messageBtn}
 </div>
-          <img src="${product.image}" alt="" class="product-image" onerror="this.src='https://via.placeholder.com/400'">
+          <img src="${escapeAttr(imageUrl)}" alt="" class="product-image" onerror="this.src='https://via.placeholder.com/400'">
           <div class="product-content">
             <div class="product-title">${product.title}</div>
             <div class="product-price">KES ${product.price.toLocaleString()}</div>
@@ -260,6 +330,12 @@ function setupImagePreview(inputId, previewContainerId, previewImgId) {
 async function uploadProduct(event) {
   event.preventDefault();
 
+  if (!ensureCurrentUserId()) {
+    alert('Session expired. Please log in again.');
+    window.location.href = 'login.html';
+    return;
+  }
+
   const title = document.getElementById('productTitle').value;
   const description = document.getElementById('productDesc').value;
   const price = document.getElementById('productPrice').value;
@@ -356,8 +432,8 @@ async function loadSocialFeed(category = 'all') {
       const authorName = post.author?.username || 'Unknown User';
       const authorPic = post.author?.profilePicture || 'https://via.placeholder.com/150';
       const mediaUrl = resolveMediaUrl(post.media);
-      const messageBtn = authorId && authorId !== currentUser.id
-        ? `<button type="button" class="action-btn" data-social-message data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}">💬</button>`
+      const messageBtn = authorId && !sameUserId(authorId, currentUser.id)
+        ? `<button type="button" class="action-btn" data-social-message data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}">💬 Message</button>`
         : '';
       const profileAttrs = authorId
         ? `data-social-profile data-user-id="${escapeAttr(authorId)}" data-user-name="${escapeAttr(authorName)}" style="cursor: pointer;"`
@@ -598,17 +674,19 @@ async function openConversation(userId, username) {
 }
 
 function startConversation(userId, userName) {
-  if (!userId || userId === 'undefined' || userId === 'null') {
+  ensureCurrentUserId();
+  const id = userId ? String(userId).trim() : '';
+  if (!id || id === 'undefined' || id === 'null') {
     alert('Could not find this user. Please refresh the page and try again.');
     return;
   }
-  if (userId === currentUser.id) {
+  if (sameUserId(id, currentUser.id)) {
     alert('You cannot message yourself.');
     return;
   }
-  currentChat = { id: userId, name: userName };
+  currentChat = { id, name: userName || 'User' };
   switchPage('messages');
-  document.getElementById('chatHeader').innerHTML = `<h3>${userName}</h3>`;
+  document.getElementById('chatHeader').innerHTML = `<h3>${escapeAttr(userName || 'User')}</h3>`;
   document.getElementById('messagesArea').innerHTML = '<p>Start chatting!</p>';
   loadConversations();
 }
