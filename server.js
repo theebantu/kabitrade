@@ -7,6 +7,8 @@ const fs = require('fs');
 const multer = require('multer');
 const http = require('http');
 const socketIo = require('socket.io');
+const store = require('./store');
+const mediaStore = require('./media');
 
 // ========== SETUP ==========
 const app = express();
@@ -32,20 +34,9 @@ if (!fs.existsSync(uploadsFolder)) fs.mkdirSync(uploadsFolder);
 // Serve uploaded images
 app.use('/uploads', express.static(uploadsFolder));
 
-// Multer configuration for image uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsFolder);
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
-    cb(null, uniqueName);
-  }
-});
-
 const upload = multer({
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -53,9 +44,8 @@ const upload = multer({
 
     if (mimetype && extname) {
       return cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
     }
+    cb(new Error('Only image files are allowed'));
   }
 });
 
@@ -65,27 +55,11 @@ const productsFile = path.join(dataFolder, 'products.json');
 const socialPostsFile = path.join(dataFolder, 'socialPosts.json');
 const messagesFile = path.join(dataFolder, 'messages.json');
 
-// Initialize data files if they don't exist
-function initializeDataFiles() {
-  if (!fs.existsSync(usersFile)) fs.writeFileSync(usersFile, JSON.stringify([]));
-  if (!fs.existsSync(productsFile)) fs.writeFileSync(productsFile, JSON.stringify([]));
-  if (!fs.existsSync(socialPostsFile)) fs.writeFileSync(socialPostsFile, JSON.stringify([]));
-  if (!fs.existsSync(messagesFile)) fs.writeFileSync(messagesFile, JSON.stringify([]));
-}
-
-initializeDataFiles();
-
 // ========== HELPER FUNCTIONS ==========
-function readJsonFile(filePath) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
-function writeJsonFile(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+function saveImageToDisk(file) {
+  const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
+  fs.writeFileSync(path.join(uploadsFolder, uniqueName), file.buffer);
+  return `/uploads/${uniqueName}`;
 }
 
 function generateId() {
@@ -119,21 +93,41 @@ function normalizeSocialPostAuthor(post) {
 }
 
 // ========== IMAGE UPLOAD ROUTE ==========
-app.post('/api/upload', upload.single('image'), (req, res) => {
+app.post('/api/upload', upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const imageUrl = `/uploads/${req.file.filename}`;
-    const absoluteUrl = `${req.protocol}://${req.get('host')}${imageUrl}`;
+    let imageUrl = store.isMongo()
+      ? await mediaStore.saveUploadedFile(req.file)
+      : saveImageToDisk(req.file);
 
+    if (!imageUrl) {
+      return res.status(500).json({ error: 'Failed to save image' });
+    }
+
+    const absoluteUrl = `${req.protocol}://${req.get('host')}${imageUrl}`;
     res.json({
       message: 'Image uploaded successfully',
-      imageUrl: imageUrl,
-      absoluteUrl,
-      filename: req.file.filename
+      imageUrl,
+      absoluteUrl
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/media/:id', async (req, res) => {
+  try {
+    const file = await mediaStore.getMediaFile(req.params.id);
+    if (!file) {
+      return res.status(404).json({ error: 'Image not found' });
+    }
+    const buffer = Buffer.from(file.data, 'base64');
+    res.set('Content-Type', file.mimeType || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.send(buffer);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -142,7 +136,7 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
 // ========== AUTHENTICATION ROUTES ==========
 
 // REGISTER
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password, confirmPassword } = req.body;
 
@@ -154,14 +148,12 @@ app.post('/api/auth/register', (req, res) => {
       return res.status(400).json({ error: 'Passwords do not match' });
     }
 
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
 
-    // Check if user exists
-    if (users.find(u => u.username === username || u.email === email)) {
+    if (users.find(u => u.username.toLowerCase() === username.toLowerCase() || u.email.toLowerCase() === email.toLowerCase())) {
       return res.status(400).json({ error: 'Username or email already exists' });
     }
 
-    // Create new user
     const newUser = {
       id: generateId(),
       username,
@@ -172,11 +164,11 @@ app.post('/api/auth/register', (req, res) => {
       followers: [],
       following: [],
       location: 'Kenya',
-      createdAt: new Date()
+      createdAt: new Date().toISOString()
     };
 
     users.push(newUser);
-    writeJsonFile(usersFile, users);
+    await store.set('users', users);
 
     res.status(201).json({
       message: 'User created successfully',
@@ -195,8 +187,8 @@ app.post('/api/auth/register', (req, res) => {
   }
 });
 
-// LOGIN
-app.post('/api/auth/login', (req, res) => {
+// LOGIN (username or email)
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -204,11 +196,15 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(400).json({ error: 'Username and password required' });
     }
 
-    const users = readJsonFile(usersFile);
-    const user = users.find(u => u.username === username);
+    const users = await store.get('users');
+    const loginId = username.trim().toLowerCase();
+    const user = users.find(u =>
+      u.username.toLowerCase() === loginId ||
+      (u.email && u.email.toLowerCase() === loginId)
+    );
 
     if (!user) {
-      return res.status(400).json({ error: 'User not found' });
+      return res.status(400).json({ error: 'User not found. If you signed up before, the server may have reset — please register again or contact support.' });
     }
 
     if (user.password !== password) {
@@ -233,11 +229,11 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // FORGOT PASSWORD
-app.post('/api/auth/forgot-password', (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
 
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
     const user = users.find(u => u.email === email);
 
     if (!user) {
@@ -257,7 +253,7 @@ app.post('/api/auth/forgot-password', (req, res) => {
 });
 
 // RESET PASSWORD
-app.post('/api/auth/reset-password', (req, res) => {
+app.post('/api/auth/reset-password', async (req, res) => {
   try {
     const { email, newPassword, confirmPassword } = req.body;
 
@@ -265,7 +261,7 @@ app.post('/api/auth/reset-password', (req, res) => {
       return res.status(400).json({ error: 'Passwords do not match' });
     }
 
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
     const user = users.find(u => u.email === email);
 
     if (!user) {
@@ -273,7 +269,7 @@ app.post('/api/auth/reset-password', (req, res) => {
     }
 
     user.password = newPassword;
-    writeJsonFile(usersFile, users);
+    await store.set('users', users);
 
     res.json({ message: 'Password reset successful' });
   } catch (error) {
@@ -284,7 +280,7 @@ app.post('/api/auth/reset-password', (req, res) => {
 // ========== PRODUCTS ROUTES ==========
 
 // UPLOAD PRODUCT
-app.post('/api/products/upload', (req, res) => {
+app.post('/api/products/upload', async (req, res) => {
   try {
     const { title, description, price, category, image, sellerId } = req.body;
 
@@ -292,7 +288,7 @@ app.post('/api/products/upload', (req, res) => {
       return res.status(400).json({ error: 'All fields required' });
     }
 
-    const products = readJsonFile(productsFile);
+    const products = await store.get('products');
 
     const newProduct = {
       id: generateId(),
@@ -308,7 +304,7 @@ app.post('/api/products/upload', (req, res) => {
     };
 
     products.push(newProduct);
-    writeJsonFile(productsFile, products);
+    await store.set('products', products);
 
     res.status(201).json({
       message: 'Product uploaded successfully',
@@ -320,10 +316,10 @@ app.post('/api/products/upload', (req, res) => {
 });
 
 // GET ALL PRODUCTS
-app.get('/api/products/feed', (req, res) => {
+app.get('/api/products/feed', async (req, res) => {
   try {
-    const products = readJsonFile(productsFile);
-    const users = readJsonFile(usersFile);
+    const products = await store.get('products');
+    const users = await store.get('users');
 
     const productsWithSeller = products.map(product => {
       const seller = users.find(u => u.id === product.seller);
@@ -344,10 +340,10 @@ app.get('/api/products/feed', (req, res) => {
 });
 
 // GET PRODUCTS BY CATEGORY
-app.get('/api/products/category/:category', (req, res) => {
+app.get('/api/products/category/:category', async (req, res) => {
   try {
-    const products = readJsonFile(productsFile);
-    const users = readJsonFile(usersFile);
+    const products = await store.get('products');
+    const users = await store.get('users');
 
     const filtered = products
       .filter(p => p.category === req.params.category)
@@ -370,10 +366,10 @@ app.get('/api/products/category/:category', (req, res) => {
 });
 
 // LIKE PRODUCT
-app.post('/api/products/:productId/like', (req, res) => {
+app.post('/api/products/:productId/like', async (req, res) => {
   try {
     const { userId } = req.body;
-    const products = readJsonFile(productsFile);
+    const products = await store.get('products');
 
     const product = products.find(p => p.id === req.params.productId);
     if (!product) {
@@ -386,7 +382,7 @@ app.post('/api/products/:productId/like', (req, res) => {
       product.likes.push(userId);
     }
 
-    writeJsonFile(productsFile, products);
+    await store.set('products', products);
 
     res.json({
       likes: product.likes.length,
@@ -398,10 +394,10 @@ app.post('/api/products/:productId/like', (req, res) => {
 });
 
 // ADD COMMENT TO PRODUCT
-app.post('/api/products/:productId/comment', (req, res) => {
+app.post('/api/products/:productId/comment', async (req, res) => {
   try {
     const { userId, username, comment } = req.body;
-    const products = readJsonFile(productsFile);
+    const products = await store.get('products');
 
     const product = products.find(p => p.id === req.params.productId);
     if (!product) {
@@ -415,7 +411,7 @@ app.post('/api/products/:productId/comment', (req, res) => {
       timestamp: new Date()
     });
 
-    writeJsonFile(productsFile, products);
+    await store.set('products', products);
 
     res.status(201).json({
       message: 'Comment added',
@@ -429,7 +425,7 @@ app.post('/api/products/:productId/comment', (req, res) => {
 // ========== SOCIAL ROUTES ==========
 
 // CREATE SOCIAL POST
-app.post('/api/social/create', (req, res) => {
+app.post('/api/social/create', async (req, res) => {
   try {
     const { category, content, media, mediaType } = req.body;
     const authorId = resolveAuthorId(req.body.authorId ?? req.body.author);
@@ -438,13 +434,13 @@ app.post('/api/social/create', (req, res) => {
       return res.status(400).json({ error: 'Valid author and category required' });
     }
 
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
     const authorUser = users.find(u => u.id === authorId);
     if (!authorUser) {
       return res.status(400).json({ error: 'Author not found. Please log in again.' });
     }
 
-    const posts = readJsonFile(socialPostsFile);
+    const posts = await store.get('socialPosts');
 
     const newPost = {
       id: generateId(),
@@ -460,7 +456,7 @@ app.post('/api/social/create', (req, res) => {
     };
 
     posts.push(newPost);
-    writeJsonFile(socialPostsFile, posts);
+    await store.set('socialPosts', posts);
 
     res.status(201).json({
       message: 'Post created successfully',
@@ -475,15 +471,15 @@ app.post('/api/social/create', (req, res) => {
 });
 
 // GET SOCIAL FEED
-app.get('/api/social/feed', (req, res) => {
+app.get('/api/social/feed', async (req, res) => {
   try {
-    let posts = readJsonFile(socialPostsFile);
-    const users = readJsonFile(usersFile);
+    let posts = await store.get('socialPosts');
+    const users = await store.get('users');
 
     posts = posts
       .filter(p => new Date(p.expiresAt) > new Date())
       .map(normalizeSocialPostAuthor);
-    writeJsonFile(socialPostsFile, posts);
+    await store.set('socialPosts', posts);
 
     const postsWithAuthor = posts.map(post => ({
       ...post,
@@ -497,10 +493,10 @@ app.get('/api/social/feed', (req, res) => {
 });
 
 // GET POSTS BY CATEGORY
-app.get('/api/social/category/:category', (req, res) => {
+app.get('/api/social/category/:category', async (req, res) => {
   try {
-    let posts = readJsonFile(socialPostsFile);
-    const users = readJsonFile(usersFile);
+    let posts = await store.get('socialPosts');
+    const users = await store.get('users');
 
     posts = posts.filter(p => new Date(p.expiresAt) > new Date());
 
@@ -519,10 +515,10 @@ app.get('/api/social/category/:category', (req, res) => {
 });
 
 // LIKE SOCIAL POST
-app.post('/api/social/:postId/like', (req, res) => {
+app.post('/api/social/:postId/like', async (req, res) => {
   try {
     const { userId } = req.body;
-    const posts = readJsonFile(socialPostsFile);
+    const posts = await store.get('socialPosts');
 
     const post = posts.find(p => p.id === req.params.postId);
     if (!post) {
@@ -535,7 +531,7 @@ app.post('/api/social/:postId/like', (req, res) => {
       post.likes.push(userId);
     }
 
-    writeJsonFile(socialPostsFile, posts);
+    await store.set('socialPosts', posts);
 
     res.json({
       likes: post.likes.length,
@@ -547,10 +543,10 @@ app.post('/api/social/:postId/like', (req, res) => {
 });
 
 // ADD COMMENT TO SOCIAL POST
-app.post('/api/social/:postId/comment', (req, res) => {
+app.post('/api/social/:postId/comment', async (req, res) => {
   try {
     const { userId, username, comment } = req.body;
-    const posts = readJsonFile(socialPostsFile);
+    const posts = await store.get('socialPosts');
 
     const post = posts.find(p => p.id === req.params.postId);
     if (!post) {
@@ -564,7 +560,7 @@ app.post('/api/social/:postId/comment', (req, res) => {
       timestamp: new Date()
     });
 
-    writeJsonFile(socialPostsFile, posts);
+    await store.set('socialPosts', posts);
 
     res.status(201).json({
       message: 'Comment added',
@@ -578,8 +574,8 @@ app.post('/api/social/:postId/comment', (req, res) => {
 // ========== MESSAGING ==========
 const activeUsers = {};
 
-function persistAndDeliverMessage(sender, receiver, messageText, senderName) {
-  const messages = readJsonFile(messagesFile);
+async function persistAndDeliverMessage(sender, receiver, messageText, senderName) {
+  const messages = await store.get('messages');
   const newMessage = {
     id: generateId(),
     sender,
@@ -591,7 +587,7 @@ function persistAndDeliverMessage(sender, receiver, messageText, senderName) {
   if (senderName) newMessage.senderName = senderName;
 
   messages.push(newMessage);
-  writeJsonFile(messagesFile, messages);
+  await store.set('messages', messages);
 
   if (activeUsers[receiver]) {
     io.to(activeUsers[receiver]).emit('receive-message', {
@@ -609,10 +605,10 @@ function persistAndDeliverMessage(sender, receiver, messageText, senderName) {
 // ========== MESSAGE ROUTES (specific paths before :userId1/:userId2) ==========
 
 // GET CONVERSATIONS FOR A USER
-app.get('/api/messages/user/:userId', (req, res) => {
+app.get('/api/messages/user/:userId', async (req, res) => {
   try {
-    const messages = readJsonFile(messagesFile);
-    const users = readJsonFile(usersFile);
+    const messages = await store.get('messages');
+    const users = await store.get('users');
     const userId = req.params.userId;
     const conversationMap = {};
 
@@ -645,10 +641,10 @@ app.get('/api/messages/user/:userId', (req, res) => {
 });
 
 // GET ALL CONVERSATIONS FOR A USER (alternate response shape)
-app.get('/api/messages/conversations/:userId', (req, res) => {
+app.get('/api/messages/conversations/:userId', async (req, res) => {
   try {
-    const messages = readJsonFile(messagesFile);
-    const users = readJsonFile(usersFile);
+    const messages = await store.get('messages');
+    const users = await store.get('users');
     const userId = req.params.userId;
 
     const conversationPartners = new Set();
@@ -687,7 +683,7 @@ app.get('/api/messages/conversations/:userId', (req, res) => {
 });
 
 // SEND MESSAGE
-app.post('/api/messages/send', (req, res) => {
+app.post('/api/messages/send', async (req, res) => {
   try {
     const { sender, receiver, message, senderName } = req.body;
 
@@ -695,12 +691,12 @@ app.post('/api/messages/send', (req, res) => {
       return res.status(400).json({ error: 'All fields required' });
     }
 
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
     if (!users.find(u => u.id === sender) || !users.find(u => u.id === receiver)) {
       return res.status(400).json({ error: 'Invalid sender or receiver' });
     }
 
-    const newMessage = persistAndDeliverMessage(sender, receiver, message, senderName);
+    const newMessage = await persistAndDeliverMessage(sender, receiver, message, senderName);
     res.status(201).json(newMessage);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -708,9 +704,9 @@ app.post('/api/messages/send', (req, res) => {
 });
 
 // MARK MESSAGE AS READ
-app.put('/api/messages/:messageId/read', (req, res) => {
+app.put('/api/messages/:messageId/read', async (req, res) => {
   try {
-    const messages = readJsonFile(messagesFile);
+    const messages = await store.get('messages');
     const message = messages.find(m => m.id === req.params.messageId);
 
     if (!message) {
@@ -718,7 +714,7 @@ app.put('/api/messages/:messageId/read', (req, res) => {
     }
 
     message.read = true;
-    writeJsonFile(messagesFile, messages);
+    await store.set('messages', messages);
 
     res.json({ message: 'Message marked as read' });
   } catch (error) {
@@ -727,9 +723,9 @@ app.put('/api/messages/:messageId/read', (req, res) => {
 });
 
 // GET ALL MESSAGES BETWEEN TWO USERS (must be after /user/ and /conversations/)
-app.get('/api/messages/:userId1/:userId2', (req, res) => {
+app.get('/api/messages/:userId1/:userId2', async (req, res) => {
   try {
-    const messages = readJsonFile(messagesFile);
+    const messages = await store.get('messages');
     const userId1 = req.params.userId1;
     const userId2 = req.params.userId2;
 
@@ -747,9 +743,9 @@ app.get('/api/messages/:userId1/:userId2', (req, res) => {
 // ========== USER ROUTES ==========
 
 // GET USER PROFILE
-app.get('/api/users/:userId', (req, res) => {
+app.get('/api/users/:userId', async (req, res) => {
   try {
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
     const user = users.find(u => u.id === req.params.userId);
 
     if (!user) {
@@ -763,9 +759,9 @@ app.get('/api/users/:userId', (req, res) => {
 });
 
 // SEARCH USERS
-app.get('/api/users/search/:query', (req, res) => {
+app.get('/api/users/search/:query', async (req, res) => {
   try {
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
     const query = req.params.query.toLowerCase();
 
     const results = users.filter(u =>
@@ -779,10 +775,10 @@ app.get('/api/users/search/:query', (req, res) => {
 });
 
 // FOLLOW USER
-app.post('/api/users/:userId/follow', (req, res) => {
+app.post('/api/users/:userId/follow', async (req, res) => {
   try {
     const { currentUserId } = req.body;
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
 
     const userToFollow = users.find(u => u.id === req.params.userId);
     const currentUser = users.find(u => u.id === currentUserId);
@@ -790,6 +786,9 @@ app.post('/api/users/:userId/follow', (req, res) => {
     if (!userToFollow || !currentUser) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    currentUser.following = currentUser.following || [];
+    userToFollow.followers = userToFollow.followers || [];
 
     if (!currentUser.following.includes(req.params.userId)) {
       currentUser.following.push(req.params.userId);
@@ -799,7 +798,7 @@ app.post('/api/users/:userId/follow', (req, res) => {
       userToFollow.followers.push(currentUserId);
     }
 
-    writeJsonFile(usersFile, users);
+    await store.set('users', users);
 
     res.json({ message: 'Followed successfully' });
   } catch (error) {
@@ -808,10 +807,10 @@ app.post('/api/users/:userId/follow', (req, res) => {
 });
 
 // UNFOLLOW USER
-app.post('/api/users/:userId/unfollow', (req, res) => {
+app.post('/api/users/:userId/unfollow', async (req, res) => {
   try {
     const { currentUserId } = req.body;
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
 
     const userToUnfollow = users.find(u => u.id === req.params.userId);
     const currentUser = users.find(u => u.id === currentUserId);
@@ -823,7 +822,7 @@ app.post('/api/users/:userId/unfollow', (req, res) => {
     currentUser.following = currentUser.following.filter(id => id !== req.params.userId);
     userToUnfollow.followers = userToUnfollow.followers.filter(id => id !== currentUserId);
 
-    writeJsonFile(usersFile, users);
+    await store.set('users', users);
 
     res.json({ message: 'Unfollowed successfully' });
   } catch (error) {
@@ -832,10 +831,10 @@ app.post('/api/users/:userId/unfollow', (req, res) => {
 });
 
 // UPDATE USER PROFILE
-app.put('/api/users/:userId', (req, res) => {
+app.put('/api/users/:userId', async (req, res) => {
   try {
     const { bio, profilePicture, location } = req.body;
-    const users = readJsonFile(usersFile);
+    const users = await store.get('users');
 
     const user = users.find(u => u.id === req.params.userId);
     if (!user) {
@@ -846,7 +845,7 @@ app.put('/api/users/:userId', (req, res) => {
     if (profilePicture) user.profilePicture = profilePicture;
     if (location) user.location = location;
 
-    writeJsonFile(usersFile, users);
+    await store.set('users', users);
 
     res.json({ message: 'Profile updated', user });
   } catch (error) {
@@ -864,9 +863,9 @@ io.on('connection', (socket) => {
     io.emit('user-status', { userId, status: 'online' });
   });
 
-  socket.on('send-message', (data) => {
+  socket.on('send-message', async (data) => {
     try {
-      const message = persistAndDeliverMessage(
+      const message = await persistAndDeliverMessage(
         data.senderId,
         data.receiverId,
         data.message,
@@ -892,8 +891,30 @@ io.on('connection', (socket) => {
 
 // ========== START SERVER ==========
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`✅ All data stored in /data folder (no database needed!)`);
-  console.log(`📸 Images stored in /uploads folder`);
-});
+
+async function startServer() {
+  try {
+    await store.init({
+      users: usersFile,
+      products: productsFile,
+      socialPosts: socialPostsFile,
+      messages: messagesFile
+    });
+
+    server.listen(PORT, () => {
+      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      if (store.isMongo()) {
+        console.log('✅ Persistent storage: MongoDB (users & posts survive restarts)');
+        console.log('📸 Images stored in MongoDB');
+      } else {
+        console.log('⚠️  Using local JSON files — set MONGODB_URI on Render for permanent storage');
+        console.log('📸 Images stored in /uploads folder');
+      }
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
